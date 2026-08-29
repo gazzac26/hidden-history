@@ -277,7 +277,7 @@ internal fun crossCheckSalvageClaim(
      * PENDING is not confirmation of a write-off. It means the
      * available field cannot currently support a clean conclusion.
      */
-    if (
+        if (
         category in setOf(
             "PENDING",
             "PENDING VERIFICATION",
@@ -285,17 +285,24 @@ internal fun crossCheckSalvageClaim(
         )
     ) {
         if (writtenOffClaim) {
+            warnings.add(
+                "Official vehicle data contains a salvage/write-off status marker of 'PENDING'. Please purchase a Pro Report for complete verification."
+            )
             verificationItems.add(
-                "The advert claims the vehicle has never been written off, but the available official salvage status is '$category'. This does not by itself prove a write-off; obtain independent vehicle-history evidence before relying on the claim."
+                "Purchase a Pro Report to verify the pending salvage/write-off status using an independent vehicle-history source before purchase."
             )
         } else {
+            warnings.add(
+                "Official vehicle data contains a salvage/write-off status marker of 'PENDING'. Please purchase a Pro Report to review full details."
+            )
             verificationItems.add(
-                "The available official salvage status is '$category'. This does not by itself prove a write-off; obtain independent vehicle-history evidence before purchase."
+                "Purchase a Pro Report to obtain independent vehicle-history evidence for the pending salvage status before purchase."
             )
         }
 
         return
     }
+
 
     /*
      * -------------------------------------------------------------

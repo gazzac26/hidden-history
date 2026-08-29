@@ -8,7 +8,6 @@ import com.hiddenhistory.engine.AdvertParserEngine
 import com.hiddenhistory.engine.advert.crosscheck.AdvertOfficialCrossCheckEngine
 import com.hiddenhistory.models.AdvertAnalysis
 import com.hiddenhistory.models.MotTest
-import com.hiddenhistory.models.SymptomReport
 import com.hiddenhistory.models.Vehicle
 import com.hiddenhistory.repository.AdvertAnalysisRepository
 import com.hiddenhistory.repository.HiddenHistoryRepository
@@ -81,12 +80,7 @@ class ProVehicleSearchViewModel : ViewModel() {
      *
      * Retained for compatibility with existing callers.
      *
-     * IMPORTANT:
-     *
-     * Pro Search no longer generates the removed legacy vehicle intelligence result through the
-     * old AutoApp intelligence pipeline.
-     *
-     * Pro analysis is now provided by AdvertAnalysis.
+     * Pro advert analysis is provided by AdvertAnalysis.
      */
 
     private val _currentAnalysisResult =
@@ -114,20 +108,25 @@ class ProVehicleSearchViewModel : ViewModel() {
      * ADVERT ANALYSIS
      * =========================================================
      *
-     * This is the actual Pro analysis result.
+     * Advert pipeline:
      *
-     * Pro Search uses the SAME AdvertAnalysisRepository used by
-     * AdvertAnalysisViewModel.
-     *
-     * Therefore both pathways ultimately use:
-     *
+     * Advert input
+     *      ↓
+     * AdvertParserEngine
+     *      ↓
+     * Extract advert information
+     *      ↓
+     * smooth-handler / official lookup
+     *      ↓
+     * Official vehicle JSON
+     *      ↓
      * AdvertAnalysisRepository
-     *          ↓
-     * Supabase
-     *          ↓
+     *      ↓
      * analyse-advert Edge Function
-     *
-     * There is NO AutoApp intelligence coordinator involved.
+     *      ↓
+     * Gemini
+     *      ↓
+     * AdvertAnalysis
      */
 
     private val _advertAnalysis =
@@ -187,13 +186,21 @@ class ProVehicleSearchViewModel : ViewModel() {
 
     /*
      * =========================================================
-     * OFFICIAL VEHICLE LOOKUP
+     * SMOOTH HANDLER / OFFICIAL VEHICLE LOOKUP
      * =========================================================
      *
-     * This is ONLY responsible for retrieving the official
-     * DVLA + DVSA/MOT vehicle payload.
+     * VehicleSearchOfficialLookup is the client-side wrapper
+     * around the official vehicle lookup Edge Function.
      *
-     * It does NOT perform analysis.
+     * That Edge Function is the smooth-handler:
+     *
+     *     registration
+     *          ↓
+     *     DVLA + DVSA
+     *          ↓
+     *     canonical vehicle JSON
+     *
+     * It does NOT perform Gemini analysis.
      */
 
     private val officialLookup =
@@ -206,16 +213,17 @@ class ProVehicleSearchViewModel : ViewModel() {
      * ADVERT ANALYSIS REPOSITORY
      * =========================================================
      *
-     * IMPORTANT:
+     * This is the ONLY analysis hand-off.
      *
-     * This is the same repository used by AdvertAnalysisViewModel.
+     * AdvertAnalysisRepository sends:
      *
-     * We deliberately do NOT create or instantiate an
-     * AdvertAnalysisViewModel here.
+     * - complete advert text
+     * - extracted registration
+     * - official vehicle JSON
      *
-     * ViewModels should not depend directly on other ViewModels.
+     * to analyse-advert.
      *
-     * Both ViewModels use the same repository / Edge Function.
+     * The Edge Function then handles Gemini.
      */
 
     private val advertAnalysisRepository =
@@ -223,8 +231,20 @@ class ProVehicleSearchViewModel : ViewModel() {
             SupabaseManager.client
         )
 
+    /*
+     * =========================================================
+     * ADVERT INFORMATION EXTRACTION
+     * =========================================================
+     */
+
     private val advertParser =
         AdvertParserEngine()
+
+    /*
+     * =========================================================
+     * OFFICIAL CROSS-CHECK
+     * =========================================================
+     */
 
     private val advertOfficialCrossCheckEngine =
         AdvertOfficialCrossCheckEngine()
@@ -233,16 +253,6 @@ class ProVehicleSearchViewModel : ViewModel() {
      * =========================================================
      * HIDDEN HISTORY SAVE PATH
      * =========================================================
-     *
-     * Existing permanent Hidden History storage pathway:
-     *
-     * ProVehicleSearchViewModel
-     *          ↓
-     * VehicleSearchSavedReports
-     *          ↓
-     * HiddenHistoryRepository
-     *          ↓
-     * Supabase
      */
 
     private val hiddenHistoryRepository =
@@ -263,46 +273,64 @@ class ProVehicleSearchViewModel : ViewModel() {
      * =========================================================
      * REGISTRATION EXTRACTION
      * =========================================================
+     *
+     * Detects modern UK registrations inside a full advert.
+     *
+     * Examples:
+     *
+     * BV68LDF
+     * BV68 LDF
+     * AB12 CDE
      */
 
-    private val ukRegPattern =
+    private val ukModernRegPattern =
         Regex(
             pattern =
-                "\\b(?:[A-Z]{2}[0-9]{2}\\s?[A-Z]{3}|[A-Z]{1}[0-9]{1,3}[A-Z]{3}|[A-Z]{3}[0-9]{1,3}[A-Z]{1}|[A-Z]{1,3}[0-9]{1,3}|[0-9]{1,4}[A-Z]{1,2}|[A-Z]{1,2}[0-9]{1,4}|[A-Z]{3}[0-9]{1,3}[A-Z])\\b",
+                """(?<![A-Z0-9])([A-Z]{2}[0-9]{2}\s?[A-Z]{3})(?![A-Z0-9])""",
 
-            option =
-                RegexOption.IGNORE_CASE
+            options =
+                setOf(
+                    RegexOption.IGNORE_CASE
+                )
         )
 
-        private fun extractRegistration(
+    private fun extractRegistration(
         text: String
     ): String? {
 
         val match =
-            ukRegPattern.find(
+            ukModernRegPattern.find(
                 text
             )
 
-        val candidate = match
-            ?.value
-            ?.uppercase()
-            ?.replace(
-                Regex("\\s+"),
-                ""
+        if (
+            match == null
+        ) {
+
+            Log.d(
+                "ProVehicleSearch",
+                "No modern UK registration found in advert."
             )
 
-        // Prevent engine capacities like "2.0L" from being extracted as registrations
-        if (
-            candidate.isNullOrBlank() ||
-            candidate.length < 5 ||
-            candidate.contains("L") && candidate.length <= 3
-        ) {
             return null
         }
 
+        val candidate =
+            match
+                .groupValues[1]
+                .uppercase()
+                .replace(
+                    Regex("\\s+"),
+                    ""
+                )
+
+        Log.d(
+            "ProVehicleSearch",
+            "Registration extracted from advert: $candidate"
+        )
+
         return candidate
     }
-
 
     /*
      * =========================================================
@@ -348,10 +376,6 @@ class ProVehicleSearchViewModel : ViewModel() {
      * =========================================================
      * SAVE CURRENT REPORT
      * =========================================================
-     *
-     * Uses the existing Hidden History permanent storage pathway.
-     *
-     * This does NOT create another Supabase save implementation.
      */
 
     fun saveCurrentReport() {
@@ -402,6 +426,13 @@ class ProVehicleSearchViewModel : ViewModel() {
                             it.isNotBlank()
                         }
 
+                /*
+                 * Re-run the existing advert parser only for
+                 * persistence / cross-check data.
+                 *
+                 * This does NOT trigger another AI analysis.
+                 */
+
                 val parsedAdvert =
                     rawAdvertInput
                         ?.let {
@@ -414,9 +445,13 @@ class ProVehicleSearchViewModel : ViewModel() {
                 val officialCrossCheck =
                     parsedAdvert
                         ?.let { advert ->
+
                             advertOfficialCrossCheckEngine.compare(
-                                advert = advert,
-                                vehicle = vehicle
+                                advert =
+                                    advert,
+
+                                vehicle =
+                                    vehicle
                             )
                         }
 
@@ -482,11 +517,55 @@ class ProVehicleSearchViewModel : ViewModel() {
      * 2. Full advert containing registration
      * 3. Full advert without registration
      *
-     * IMPORTANT:
+     * REGISTRATION ONLY:
      *
-     * All analysis ultimately goes through AdvertAnalysisRepository.
+     *     Registration
+     *          ↓
+     *     smooth-handler
+     *          ↓
+     *     Official vehicle data
+     *          ↓
+     *     Result
      *
-     * The old AutoApp intelligence pipeline is NOT called.
+     *
+     * FULL ADVERT:
+     *
+     *     Advert
+     *          ↓
+     *     AdvertParserEngine
+     *          ↓
+     *     Advert information
+     *          ↓
+     *     Extract registration
+     *          ↓
+     *     smooth-handler
+     *          ↓
+     *     Official vehicle data
+     *          ↓
+     *     analyse-advert
+     *          ↓
+     *     Gemini
+     *          ↓
+     *     AdvertAnalysis
+     *          ↓
+     *     Result
+     *
+     *
+     * FULL ADVERT WITHOUT REGISTRATION:
+     *
+     *     Advert
+     *          ↓
+     *     AdvertParserEngine
+     *          ↓
+     *     Advert information
+     *          ↓
+     *     analyse-advert
+     *          ↓
+     *     Gemini
+     *          ↓
+     *     AdvertAnalysis
+     *          ↓
+     *     Result
      */
 
     fun processUniversalInput(
@@ -520,18 +599,45 @@ class ProVehicleSearchViewModel : ViewModel() {
 
             try {
 
-                                val compactInput =
-                    trimmed.replace(
-                        Regex("\\s+"),
-                        ""
-                    ).uppercase()
+                val compactInput =
+                    trimmed
+                        .replace(
+                            Regex("\\s+"),
+                            ""
+                        )
+                        .uppercase()
 
-                // Strict UK registration pattern check for standalone input
-                val strictUkPlateRegex = Regex("^[A-Z]{1,3}[0-9]{1,4}[A-Z]{0,3}$|^[0-9]{1,4}[A-Z]{1,3}$|^[A-Z]{1,3}[0-9]{1,4}$")
+                /*
+                 * -------------------------------------------------
+                 * STRICT MODERN UK STANDALONE REGISTRATION
+                 * -------------------------------------------------
+                 */
+
+                val strictUkPlateRegex =
+                    Regex(
+                        pattern =
+                            "^[A-Z]{2}[0-9]{2}[A-Z]{3}$",
+
+                        options =
+                            setOf(
+                                RegexOption.IGNORE_CASE
+                            )
+                    )
+
                 val isStandaloneRegistration =
-                    compactInput.length in 2..8 &&
-                    strictUkPlateRegex.matches(compactInput)
+                    strictUkPlateRegex.matches(
+                        compactInput
+                    )
 
+                Log.d(
+                    "ProVehicleSearch",
+                    "Input compacted: $compactInput"
+                )
+
+                Log.d(
+                    "ProVehicleSearch",
+                    "Standalone registration: $isStandaloneRegistration"
+                )
 
                 /*
                  * -------------------------------------------------
@@ -552,11 +658,6 @@ class ProVehicleSearchViewModel : ViewModel() {
                  * -------------------------------------------------
                  * REGISTRATION ONLY
                  * -------------------------------------------------
-                 *
-                 * First obtain the official vehicle data.
-                 *
-                 * Then send that official data through the SAME
-                 * analyse-advert pathway used by AdvertAnalysisVM.
                  */
 
                 if (
@@ -564,7 +665,7 @@ class ProVehicleSearchViewModel : ViewModel() {
                 ) {
 
                     processRegistrationInputInternal(
-                        compactInput.uppercase()
+                        compactInput
                     )
 
                 } else {
@@ -625,24 +726,6 @@ class ProVehicleSearchViewModel : ViewModel() {
      * =========================================================
      * REGISTRATION-ONLY PRO SEARCH
      * =========================================================
-     *
-     * FLOW:
-     *
-     * REGISTRATION
-     *      ↓
-     * VehicleSearchOfficialLookup
-     *      ↓
-     * DVLA + DVSA/MOT
-     *
-     * There is deliberately NO:
-     *
-     * AdvertAnalysisRepository
-     * analyse-advert
-     * VehicleKnowledgeCoordinator
-     * KnowledgeRequestBuilder
-     * VehicleSearchReportBuilder
-     * legacy intelligence coordinator
-     * legacy intelligence result generation
      */
 
     private suspend fun processRegistrationInputInternal(
@@ -656,21 +739,36 @@ class ProVehicleSearchViewModel : ViewModel() {
 
         /*
          * ---------------------------------------------------------
-         * OFFICIAL LOOKUP ONLY (Smooth Handler)
+         * SMOOTH HANDLER
          * ---------------------------------------------------------
+         *
+         * This is the official vehicle data stage.
+         *
+         * The handler:
+         *
+         * - authenticates the user
+         * - checks Pro entitlement
+         * - calls DVLA
+         * - calls DVSA
+         * - merges the results
+         * - returns canonical vehicle JSON
+         *
+         * It does NOT call Gemini.
          */
 
-        retrieveOfficialVehicleData(
-            cleanPlate
-        )
+        val officialVehicleData =
+            retrieveOfficialVehicleData(
+                cleanPlate
+            )
 
         /*
          * ---------------------------------------------------------
-         * CLEAR ADVERT ANALYSIS FOR REGISTRATION-ONLY SEARCHES
+         * CLEAR ADVERT ANALYSIS
          * ---------------------------------------------------------
          */
 
-        _advertAnalysis.value = null
+        _advertAnalysis.value =
+            null
 
         /*
          * ---------------------------------------------------------
@@ -708,27 +806,103 @@ class ProVehicleSearchViewModel : ViewModel() {
      * ADVERT PROCESSING
      * =========================================================
      *
-     * FLOW:
+     * THIS IS THE IMPORTANT PIPELINE CHANGE.
      *
-     * ADVERT
-     *      ↓
-     * EXTRACT REGISTRATION
-     *      ↓
-     * OFFICIAL DVLA/DVSA LOOKUP
-     *      ↓
-     * AdvertAnalysisRepository
-     *      ↓
-     * analyse-advert
-     *      ↓
-     * AdvertAnalysis
+     * The advert is no longer treated as simply:
      *
-     * If no registration exists, the advert is still sent through
-     * Advert Analysis without official vehicle data.
+     *     advert → registration → analysis
+     *
+     * Instead:
+     *
+     *     advert
+     *       ↓
+     *     AdvertParserEngine
+     *       ↓
+     *     extracted advert information
+     *       ↓
+     *     registration
+     *       ↓
+     *     smooth-handler
+     *       ↓
+     *     official vehicle data
+     *       ↓
+     *     analyse-advert
+     *       ↓
+     *     Gemini
+     *
+     * The COMPLETE original advert is still sent to
+     * AdvertAnalysisRepository.
+     *
+     * The official vehicle JSON is also supplied when available.
      */
 
     private suspend fun processAdvertInputInternal(
         text: String
     ) {
+
+        Log.d(
+            "ProVehicleSearch",
+            "Starting Pro advert pipeline."
+        )
+
+        /*
+         * ---------------------------------------------------------
+         * STAGE 1 — EXTRACT ADVERT INFORMATION
+         * ---------------------------------------------------------
+         *
+         * Use the existing AdvertParserEngine as the first
+         * processing stage.
+         *
+         * This gives the pipeline a structured advert object
+         * before official data retrieval / AI analysis.
+         */
+
+        val parsedAdvert =
+            try {
+
+                advertParser
+                    .parse(text)
+
+            } catch (
+                e: Throwable
+            ) {
+
+                Log.e(
+                    "ProVehicleSearch",
+                    "Advert parsing failed: ${e.message}",
+                    e
+                )
+
+                null
+            }
+
+        if (
+            parsedAdvert != null
+        ) {
+
+            Log.d(
+                "ProVehicleSearch",
+                "Advert information extracted successfully."
+            )
+
+        } else {
+
+            Log.d(
+                "ProVehicleSearch",
+                "Advert parser returned no structured result. Continuing with raw advert."
+            )
+        }
+
+        /*
+         * ---------------------------------------------------------
+         * STAGE 2 — EXTRACT REGISTRATION
+         * ---------------------------------------------------------
+         *
+         * Keep the existing robust registration extraction.
+         *
+         * This allows the pipeline to work even if the parser
+         * does not expose registration as a dedicated property.
+         */
 
         val detectedRegistration =
             extractRegistration(
@@ -745,8 +919,18 @@ class ProVehicleSearchViewModel : ViewModel() {
 
         /*
          * ---------------------------------------------------------
-         * OFFICIAL DATA
+         * STAGE 3 — SMOOTH HANDLER
          * ---------------------------------------------------------
+         *
+         * If a registration exists, the smooth-handler retrieves
+         * the official DVLA + DVSA/MOT record.
+         *
+         * IMPORTANT:
+         *
+         * There is NO Gemini call here.
+         *
+         * This stage exists solely to build the official vehicle
+         * data that analyse-advert will subsequently receive.
          */
 
         val officialVehicleData =
@@ -754,11 +938,31 @@ class ProVehicleSearchViewModel : ViewModel() {
                 detectedRegistration != null
             ) {
 
+                Log.d(
+                    "ProVehicleSearch",
+                    "Registration found."
+                )
+
+                Log.d(
+                    "ProVehicleSearch",
+                    "Passing registration to smooth-handler: $detectedRegistration"
+                )
+
                 retrieveOfficialVehicleData(
                     detectedRegistration
                 )
 
             } else {
+
+                Log.d(
+                    "ProVehicleSearch",
+                    "No registration found."
+                )
+
+                Log.d(
+                    "ProVehicleSearch",
+                    "Smooth-handler skipped because no registration is available."
+                )
 
                 _currentVehicle.value =
                     null
@@ -771,12 +975,40 @@ class ProVehicleSearchViewModel : ViewModel() {
 
         /*
          * ---------------------------------------------------------
-         * ADVERT ANALYSIS
+         * STAGE 4 — ANALYSE ADVERT
          * ---------------------------------------------------------
          *
-         * This is the SAME repository and SAME Edge Function used
-         * by AdvertAnalysisViewModel.
+         * This is now deliberately AFTER the smooth-handler.
+         *
+         * The analysis repository receives:
+         *
+         * 1. COMPLETE advert text
+         * 2. extracted registration
+         * 3. official DVLA/DVSA vehicle JSON
+         *
+         * The repository then invokes:
+         *
+         *     analyse-advert Edge Function
+         *
+         * The Edge Function connects to Gemini.
          */
+
+        Log.d(
+            "ProVehicleSearch",
+            "Official data retrieval stage complete."
+        )
+
+        Log.d(
+            "ProVehicleSearch",
+            "Official vehicle data available: ${
+                officialVehicleData != null
+            }"
+        )
+
+        Log.d(
+            "ProVehicleSearch",
+            "Now passing advert + official vehicle data to analyse-advert."
+        )
 
         val analysis =
             advertAnalysisRepository
@@ -794,17 +1026,21 @@ class ProVehicleSearchViewModel : ViewModel() {
 
         /*
          * ---------------------------------------------------------
-         * STORE ANALYSIS
+         * STAGE 5 — STORE FULL ANALYSIS
          * ---------------------------------------------------------
-
          */
 
         _advertAnalysis.value =
             analysis
 
+        Log.d(
+            "ProVehicleSearch",
+            "analyse-advert completed successfully."
+        )
+
         /*
          * ---------------------------------------------------------
-         * RESULT SUMMARY
+         * STAGE 6 — RESULT SUMMARY
          * ---------------------------------------------------------
          */
 
@@ -826,6 +1062,7 @@ class ProVehicleSearchViewModel : ViewModel() {
                         if (
                             officialVehicleData != null
                         ) {
+
                             add(
                                 "DVLA + DVSA/MOT"
                             )
@@ -846,9 +1083,10 @@ class ProVehicleSearchViewModel : ViewModel() {
          * NO REGISTRATION
          * ---------------------------------------------------------
          *
-         * Advert analysis is still valid.
+         * The advert still goes through analyse-advert.
          *
-         * There simply isn't an official vehicle payload to show.
+         * Gemini therefore receives the advert even when an
+         * official vehicle record cannot be obtained.
          */
 
         if (
@@ -866,22 +1104,37 @@ class ProVehicleSearchViewModel : ViewModel() {
 
             _uiState.value =
                 emptyList()
+
+            Log.d(
+                "ProVehicleSearch",
+                "Advert had no registration. Analysis completed using advert information only."
+            )
         }
 
         Log.d(
             "ProVehicleSearch",
-            "Pro advert analysis completed."
+            "Pro advert pipeline completed."
         )
     }
 
     /*
      * =========================================================
-     * OFFICIAL VEHICLE LOOKUP ONLY
+     * OFFICIAL VEHICLE LOOKUP / SMOOTH HANDLER
      * =========================================================
      *
-     * This method retrieves the official DVLA + DVSA/MOT payload.
+     * This method is intentionally isolated from advert analysis.
      *
-     * It does NOT perform any intelligence or analysis.
+     * It ONLY:
+     *
+     *     registration
+     *          ↓
+     *     smooth-handler
+     *          ↓
+     *     DVLA + DVSA
+     *          ↓
+     *     canonical JSON
+     *
+     * No AI analysis happens here.
      */
 
     private suspend fun retrieveOfficialVehicleData(
@@ -890,7 +1143,7 @@ class ProVehicleSearchViewModel : ViewModel() {
 
         Log.d(
             "ProVehicleSearch",
-            "Starting official lookup: $cleanPlate"
+            "Starting smooth-handler official lookup: $cleanPlate"
         )
 
         val responseData =
@@ -928,11 +1181,6 @@ class ProVehicleSearchViewModel : ViewModel() {
              * ---------------------------------------------------------
              * BUILD OFFICIAL VEHICLE UI DATA
              * ---------------------------------------------------------
-             *
-             * This replaces the old VehicleSearchReportBuilder
-             * purely for presentation.
-             *
-             * No intelligence is generated here.
              */
 
             _uiState.value =
@@ -961,7 +1209,7 @@ class ProVehicleSearchViewModel : ViewModel() {
 
         Log.d(
             "ProVehicleSearch",
-            "Official lookup completed: $cleanPlate"
+            "Smooth-handler official lookup completed: $cleanPlate"
         )
 
         return responseData
@@ -972,12 +1220,9 @@ class ProVehicleSearchViewModel : ViewModel() {
      * OFFICIAL VEHICLE → EXISTING UI STATE
      * =========================================================
      *
-     * This creates the List<Any> structure expected by the existing
-     * ProVehicleSearchScreen / VehicleSearchSectionParser.
+     * ONLY official vehicle information is mapped here.
      *
-     * It contains ONLY official vehicle information.
-     *
-     * It does NOT calculate intelligence.
+     * No intelligence is generated.
      */
 
     private fun mapVehicleToUiState(
@@ -1262,7 +1507,7 @@ class ProVehicleSearchViewModel : ViewModel() {
         vehicle.markedForExport?.let {
 
             list.add(
-                "Marked For Export" to
+                "Marked for Export" to
                     it.toString()
             )
         }

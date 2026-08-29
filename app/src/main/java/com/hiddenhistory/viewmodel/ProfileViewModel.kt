@@ -49,7 +49,7 @@ class ProfileViewModel(private val profileDao: ProfileDao) : ViewModel() {
         return try {
             val user = SupabaseManager.client.auth.currentUserOrNull() ?: return Result.failure(Exception("Not logged in"))
 
-            val remoteProfile = SupabaseManager.client.from("profiles")
+            val remoteProfile = SupabaseManager.client.from("hidden_history_profiles")
                 .select { filter { eq("id", user.id) } }
                 .decodeSingle<UserProfile>()
 

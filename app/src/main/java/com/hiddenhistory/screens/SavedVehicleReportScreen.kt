@@ -29,6 +29,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.hiddenhistory.database.AppSettings
+import com.hiddenhistory.database.SettingsDao
 import com.hiddenhistory.models.MotTest
 import com.hiddenhistory.models.SymptomReport
 import com.hiddenhistory.viewmodel.SavedVehicleRecord
@@ -44,6 +46,10 @@ fun SavedVehicleReportsScreen(
     onNavigateBack: () -> Unit,
     viewModel: SavedVehicleReportsViewModel = viewModel()
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val settingsDao = remember { SettingsDao(context) }
+    val settingsState by settingsDao.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
+
     val savedReports by viewModel.savedReportsList.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
 
@@ -140,13 +146,13 @@ fun SavedVehicleReportsScreen(
                 actions = {
                     activeRecord?.let { record ->
 
-                        val context =
+                        val actionContext =
                             androidx.compose.ui.platform.LocalContext.current
 
                         IconButton(
                             onClick = {
                                 shareSavedReport(
-                                    context = context,
+                                    context = actionContext,
                                     record = record,
                                     jsonParser = jsonParser
                                 )
@@ -209,7 +215,8 @@ fun SavedVehicleReportsScreen(
 
                 SavedReportDetail(
                     record = activeRecord!!,
-                    jsonParser = jsonParser
+                    jsonParser = jsonParser,
+                    showWarnings = settingsState.analysisWarningsEnabled
                 )
             }
         }
@@ -391,7 +398,8 @@ private fun SavedReportList(
 @Composable
 private fun SavedReportDetail(
     record: SavedVehicleRecord,
-    jsonParser: Json
+    jsonParser: Json,
+    showWarnings: Boolean
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -508,8 +516,10 @@ private fun SavedReportDetail(
             VehicleHeroCard(report)
         }
 
-        item {
-            ReportAttentionCard(report)
+        if (showWarnings) {
+            item {
+                ReportAttentionCard(report)
+            }
         }
 
         item {
@@ -522,9 +532,11 @@ private fun SavedReportDetail(
             }
         }
 
-        report.crossCheck?.let {
-            item {
-                CrossCheckCard(report)
+        if (showWarnings) {
+            report.crossCheck?.let {
+                item {
+                    CrossCheckCard(report)
+                }
             }
         }
 

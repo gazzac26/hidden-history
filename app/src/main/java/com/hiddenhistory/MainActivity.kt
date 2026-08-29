@@ -6,27 +6,32 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -39,12 +44,15 @@ import androidx.navigation.navArgument
 import com.hiddenhistory.billing.VehicleReportBillingManager
 import com.hiddenhistory.data.SupabaseManager
 import com.hiddenhistory.database.AppDatabase
+import com.hiddenhistory.database.SettingsDao
 import com.hiddenhistory.screens.AdvertAnalyzerScreen
 import com.hiddenhistory.screens.FreeVehicleSearchScreen
+import com.hiddenhistory.screens.LegalDocumentScreen
 import com.hiddenhistory.screens.LoginScreen
 import com.hiddenhistory.screens.MotScreen
 import com.hiddenhistory.screens.ProVehicleSearchScreen
 import com.hiddenhistory.screens.SavedVehicleReportsScreen
+import com.hiddenhistory.screens.SettingsScreen
 import com.hiddenhistory.screens.UserProfileEditScreen
 import com.hiddenhistory.screens.UserProfileScreen
 import com.hiddenhistory.screens.VehicleReportPaymentScreen
@@ -57,6 +65,7 @@ import com.hiddenhistory.viewmodel.AdvertAnalysisViewModel
 import com.hiddenhistory.viewmodel.FreeVehicleSearchViewModel
 import com.hiddenhistory.viewmodel.MotViewModel
 import com.hiddenhistory.viewmodel.ProfileViewModel
+import com.hiddenhistory.viewmodel.SettingsViewModel
 import io.github.jan.supabase.auth.auth
 
 
@@ -96,7 +105,7 @@ class MainActivity : ComponentActivity() {
 sealed class Screen(
     val route: String,
     val title: String,
-    val icon: ImageVector
+    val icon: androidx.compose.ui.graphics.vector.ImageVector
 ) {
 
     object Home : Screen(
@@ -105,23 +114,11 @@ sealed class Screen(
         Icons.Default.Home
     )
 
-    /*
-     * =========================================================
-     * VEHICLE SEARCH GATEWAY
-     * =========================================================
-     */
-
     object Explore : Screen(
         "explore",
         "Vehicle Search",
         Icons.Default.Search
     )
-
-    /*
-     * =========================================================
-     * FREE VEHICLE SEARCH
-     * =========================================================
-     */
 
     object FreeVehicleSearch : Screen(
         "free_vehicle_search",
@@ -129,23 +126,11 @@ sealed class Screen(
         Icons.Default.Search
     )
 
-    /*
-     * =========================================================
-     * PRO VEHICLE SEARCH
-     * =========================================================
-     */
-
     object ProVehicleSearch : Screen(
         "pro_vehicle_search",
         "Pro Vehicle Search",
         Icons.Default.Search
     )
-
-    /*
-     * =========================================================
-     * SAVED REPORTS
-     * =========================================================
-     */
 
     object SavedReports : Screen(
         "saved_reports",
@@ -153,16 +138,10 @@ sealed class Screen(
         Icons.Default.Favorite
     )
 
-    /*
-     * =========================================================
-     * PROFILE
-     * =========================================================
-     */
-
     object Profile : Screen(
         "profile",
         "Profile",
-        Icons.Default.Person
+        Icons.Default.Home
     )
 
     object EditProfile : Screen(
@@ -171,11 +150,47 @@ sealed class Screen(
         Icons.Default.Edit
     )
 
+    object Settings : Screen(
+        "settings",
+        "Settings",
+        Icons.Default.Settings
+    )
+
     /*
      * =========================================================
-     * LOGIN
+     * LEGAL / PRIVACY
      * =========================================================
      */
+
+    object Terms : Screen(
+        "terms",
+        "Terms & Conditions",
+        Icons.Default.Search
+    )
+
+    object Privacy : Screen(
+        "privacy",
+        "Privacy Policy",
+        Icons.Default.Search
+    )
+
+    object VehicleDisclaimer : Screen(
+        "vehicle_disclaimer",
+        "Vehicle Data & Analysis",
+        Icons.Default.Search
+    )
+
+    object AffiliateDisclosure : Screen(
+        "affiliate_disclosure",
+        "Affiliate Disclosure",
+        Icons.Default.Search
+    )
+
+    object AccountDeletion : Screen(
+        "account_deletion",
+        "Account Deletion",
+        Icons.Default.Search
+    )
 
     object Login : Screen(
         "login",
@@ -183,30 +198,11 @@ sealed class Screen(
         Icons.Default.Home
     )
 
-    /*
-     * =========================================================
-     * MOT DETAIL
-     * =========================================================
-     *
-     * motId remains in the route for navigation compatibility.
-     *
-     * The actual selected MotTest is held by the shared MotViewModel.
-     *
-     * MotScreen therefore does NOT need to retrieve the MotTest
-     * from the route.
-     */
-
     object MotDetail : Screen(
         "mot_detail/{motId}",
         "MOT Detail",
         Icons.Default.Search
     )
-
-    /*
-     * =========================================================
-     * PAID VEHICLE REPORT PAYMENT
-     * =========================================================
-     */
 
     object VehicleReportPayment : Screen(
         "vehicle_report_payment/{advertText}",
@@ -214,35 +210,17 @@ sealed class Screen(
         Icons.Default.Search
     )
 
-    /*
-     * =========================================================
-     * FULL VEHICLE REPORT
-     * =========================================================
-     */
-
     object VehicleReport : Screen(
         "vehicle_report/{advertText}",
         "Full AI Vehicle Report",
         Icons.Default.Search
     )
 
-    /*
-     * =========================================================
-     * FREE ADVERT ANALYSER
-     * =========================================================
-     */
-
     object AdvertAnalyzer : Screen(
         "advert_analyzer/{advertText}",
         "Advert Analyzer",
         Icons.Default.Search
     )
-
-    /*
-     * =========================================================
-     * DEBUG INSPECTOR
-     * =========================================================
-     */
 
     object DebugInspector : Screen(
         "debug_inspector",
@@ -264,32 +242,9 @@ fun MainScreen() {
     val navController =
         rememberNavController()
 
-    /*
-     * =========================================================
-     * SHARED MOT VIEWMODEL
-     * =========================================================
-     *
-     * This ViewModel is owned by MainScreen.
-     *
-     * It therefore survives navigation between:
-     *
-     * FreeVehicleSearchScreen
-     *          ↓
-     * MotScreen
-     *
-     * The selected MotTest is placed into this ViewModel BEFORE
-     * navigation takes place.
-     */
-
     val motViewModel:
         MotViewModel =
         viewModel()
-
-    /*
-     * =========================================================
-     * CURRENT ROUTE
-     * =========================================================
-     */
 
     val navBackStackEntry by
         navController
@@ -299,12 +254,6 @@ fun MainScreen() {
         navBackStackEntry
             ?.destination
             ?.route
-
-    /*
-     * =========================================================
-     * LOGIN / START DESTINATION
-     * =========================================================
-     */
 
     val startDestination =
         remember {
@@ -336,12 +285,6 @@ fun MainScreen() {
             }
         }
 
-    /*
-     * =========================================================
-     * BILLING MANAGER
-     * =========================================================
-     */
-
     val context =
         LocalContext.current
 
@@ -365,6 +308,21 @@ fun MainScreen() {
 
         currentRoute !=
             Screen.EditProfile.route &&
+
+        currentRoute !=
+            Screen.Terms.route &&
+
+        currentRoute !=
+            Screen.Privacy.route &&
+
+        currentRoute !=
+            Screen.VehicleDisclaimer.route &&
+
+        currentRoute !=
+            Screen.AffiliateDisclosure.route &&
+
+        currentRoute !=
+            Screen.AccountDeletion.route &&
 
         currentRoute
             ?.startsWith(
@@ -397,15 +355,8 @@ fun MainScreen() {
             Screen.Home,
             Screen.Explore,
             Screen.SavedReports,
-            Screen.Profile,
-            Screen.DebugInspector
+            Screen.Settings
         )
-
-    /*
-     * =========================================================
-     * MAIN SCAFFOLD
-     * =========================================================
-     */
 
     Scaffold(
 
@@ -597,7 +548,9 @@ fun MainScreen() {
                     viewModel =
                         freeSearchViewModel,
 
-                    onNavigateToMotDetails = { motTest, vehicle ->
+                    onNavigateToMotDetails = {
+                        motTest,
+                        vehicle ->
 
                         motViewModel.selectMotTest(
                             motTest = motTest,
@@ -1091,6 +1044,212 @@ fun MainScreen() {
 
             /*
              * =========================================================
+             * SETTINGS
+             * =========================================================
+             */
+
+            composable(
+                Screen.Settings.route
+            ) {
+                val settingsContext =
+                    LocalContext.current
+
+                val settingsDao =
+                    remember {
+                        SettingsDao(
+                            settingsContext
+                        )
+                    }
+
+                val settingsViewModel:
+                    SettingsViewModel =
+                    viewModel(
+                        factory =
+                            SettingsViewModel.Factory(
+                                settingsDao
+                            )
+                    )
+
+                SettingsScreen(
+
+                    viewModel =
+                        settingsViewModel,
+
+                    onNavigateToProfile = {
+
+                        navController.navigate(
+                            Screen.Profile.route
+                        ) {
+
+                            launchSingleTop =
+                                true
+                        }
+                    },
+
+                    onNavigateToTerms = {
+
+                        navController.navigate(
+                            Screen.Terms.route
+                        )
+                    },
+
+                    onNavigateToPrivacy = {
+
+                        navController.navigate(
+                            Screen.Privacy.route
+                        )
+                    },
+
+                    onNavigateToVehicleDisclaimer = {
+
+                        navController.navigate(
+                            Screen.VehicleDisclaimer.route
+                        )
+                    },
+
+                    onNavigateToAffiliateDisclosure = {
+
+                        navController.navigate(
+                            Screen.AffiliateDisclosure.route
+                        )
+                    },
+
+                    onNavigateToAccountDeletion = {
+
+                        navController.navigate(
+                            Screen.AccountDeletion.route
+                        )
+                    }
+                )
+            }
+
+            /*
+             * =========================================================
+             * TERMS & CONDITIONS
+             * =========================================================
+             */
+
+            composable(
+                Screen.Terms.route
+            ) {
+
+                LegalDocumentScreen(
+
+                    title =
+                        "Terms & Conditions",
+
+                    assetPath =
+                        "legal/TERMS_AND_CONDITIONS.md",
+
+                    onNavigateBack = {
+
+                        navController.popBackStack()
+                    }
+                )
+            }
+
+            /*
+             * =========================================================
+             * PRIVACY POLICY
+             * =========================================================
+             */
+
+            composable(
+                Screen.Privacy.route
+            ) {
+
+                LegalDocumentScreen(
+
+                    title =
+                        "Privacy Policy",
+
+                    assetPath =
+                        "legal/PRIVACY_POLICY.md",
+
+                    onNavigateBack = {
+
+                        navController.popBackStack()
+                    }
+                )
+            }
+
+            /*
+             * =========================================================
+             * VEHICLE DATA & ANALYSIS
+             * =========================================================
+             */
+
+            composable(
+                Screen.VehicleDisclaimer.route
+            ) {
+
+                LegalDocumentScreen(
+
+                    title =
+                        "Vehicle Data & Analysis",
+
+                    assetPath =
+                        "legal/VEHICLE_DATA_AND_ANALYSIS_DISCLAIMER.md",
+
+                    onNavigateBack = {
+
+                        navController.popBackStack()
+                    }
+                )
+            }
+
+            /*
+             * =========================================================
+             * AFFILIATE DISCLOSURE
+             * =========================================================
+             */
+
+            composable(
+                Screen.AffiliateDisclosure.route
+            ) {
+
+                LegalDocumentScreen(
+
+                    title =
+                        "Affiliate Disclosure",
+
+                    assetPath =
+                        "legal/AFFILIATE_DISCLOSURE.md",
+
+                    onNavigateBack = {
+
+                        navController.popBackStack()
+                    }
+                )
+            }
+
+            /*
+             * =========================================================
+             * ACCOUNT DELETION
+             * =========================================================
+             */
+
+            composable(
+                Screen.AccountDeletion.route
+            ) {
+
+                LegalDocumentScreen(
+
+                    title =
+                        "Account Deletion",
+
+                    assetPath =
+                        "legal/ACCOUNT_DELETION_AND_DATA_RETENTION.md",
+
+                    onNavigateBack = {
+
+                        navController.popBackStack()
+                    }
+                )
+            }
+
+            /*
+             * =========================================================
              * DEBUG INSPECTOR
              * =========================================================
              */
@@ -1318,7 +1477,6 @@ private fun formatAdvertAnalysisForReport(
         ) {
 
             appendLine(
-
                 "The AI analysis completed successfully, " +
                     "but no report text was returned."
             )
