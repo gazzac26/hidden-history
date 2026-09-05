@@ -2,7 +2,7 @@ HIDDEN HISTORY
 
 PRIVACY POLICY
 
-Effective date: Date of first publication
+Effective date: 5 September 2026
 Last updated: 3 September 2026
 
 ---
