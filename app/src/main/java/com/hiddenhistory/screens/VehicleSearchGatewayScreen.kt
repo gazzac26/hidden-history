@@ -21,6 +21,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -50,7 +51,7 @@ fun VehicleSearchGatewayScreen(
                     )
                 },
                 navigationIcon = {
-                    androidx.compose.material3.IconButton(
+                    IconButton(
                         onClick = onNavigateBack
                     ) {
                         Icon(
@@ -72,8 +73,10 @@ fun VehicleSearchGatewayScreen(
                     rememberScrollState()
                 )
                 .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            verticalArrangement =
+                Arrangement.spacedBy(20.dp),
+            horizontalAlignment =
+                Alignment.CenterHorizontally
         ) {
 
             Spacer(
@@ -81,15 +84,20 @@ fun VehicleSearchGatewayScreen(
             )
 
             Text(
-                text = "Choose your vehicle search",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
+                text = "Vehicle Search",
+                style =
+                    MaterialTheme.typography.headlineSmall,
+                fontWeight =
+                    FontWeight.Bold
             )
 
             Text(
-                text = "Select the level of vehicle intelligence you want before entering the vehicle registration.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                text =
+                    "Enter a registration or an advert containing a registration. Hidden History will build the vehicle intelligence result from the available vehicle data.",
+                style =
+                    MaterialTheme.typography.bodyLarge,
+                color =
+                    MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             Spacer(
@@ -97,22 +105,28 @@ fun VehicleSearchGatewayScreen(
             )
 
             /*
-             * ----------------------------------------------------
-             * FREE SEARCH
-             * ----------------------------------------------------
+             * =========================================================
+             * FREE VEHICLE SEARCH
+             * =========================================================
              */
 
             Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor =
-                        MaterialTheme.colorScheme.surfaceVariant
-                )
+                modifier =
+                    Modifier.fillMaxWidth(),
+                shape =
+                    RoundedCornerShape(20.dp),
+                colors =
+                    CardDefaults.cardColors(
+                        containerColor =
+                            MaterialTheme
+                                .colorScheme
+                                .surfaceVariant
+                    )
             ) {
 
                 Column(
-                    modifier = Modifier.padding(20.dp),
+                    modifier =
+                        Modifier.padding(20.dp),
                     verticalArrangement =
                         Arrangement.spacedBy(12.dp)
                 ) {
@@ -127,15 +141,22 @@ fun VehicleSearchGatewayScreen(
                                 Icons.Default.Search,
                             contentDescription = null,
                             tint =
-                                MaterialTheme.colorScheme.primary
+                                MaterialTheme
+                                    .colorScheme
+                                    .primary
                         )
 
                         Text(
-                            text = "Free Vehicle Search",
+                            text =
+                                "Free Vehicle Search",
                             modifier =
-                                Modifier.padding(start = 10.dp),
+                                Modifier.padding(
+                                    start = 10.dp
+                                ),
                             style =
-                                MaterialTheme.typography.titleLarge,
+                                MaterialTheme
+                                    .typography
+                                    .titleLarge,
                             fontWeight =
                                 FontWeight.Bold
                         )
@@ -143,18 +164,24 @@ fun VehicleSearchGatewayScreen(
 
                     Text(
                         text =
-                            "Official vehicle information and MOT history with Hidden History's free deterministic analysis.",
+                            "Vehicle data from DVLA and DVSA/MOT together with Hidden History's free deterministic vehicle and advert analysis.",
                         style =
-                            MaterialTheme.typography.bodyMedium,
+                            MaterialTheme
+                                .typography
+                                .bodyMedium,
                         color =
-                            MaterialTheme.colorScheme.onSurfaceVariant
+                            MaterialTheme
+                                .colorScheme
+                                .onSurfaceVariant
                     )
 
                     Text(
                         text =
-                            "Includes: DVLA, DVSA/MOT and Free Analysis",
+                            "Includes: DVLA • DVSA/MOT • Free Hidden History Analysis",
                         style =
-                            MaterialTheme.typography.bodySmall,
+                            MaterialTheme
+                                .typography
+                                .bodySmall,
                         fontWeight =
                             FontWeight.SemiBold
                     )
@@ -175,31 +202,40 @@ fun VehicleSearchGatewayScreen(
                         )
 
                         Text(
-                            text = "Start Free Search",
+                            text =
+                                "Start Free Search",
                             modifier =
-                                Modifier.padding(start = 8.dp)
+                                Modifier.padding(
+                                    start = 8.dp
+                                )
                         )
                     }
                 }
             }
 
             /*
-             * ----------------------------------------------------
-             * PRO SEARCH
-             * ----------------------------------------------------
+             * =========================================================
+             * PRO VEHICLE SEARCH
+             * =========================================================
              */
 
             Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor =
-                        MaterialTheme.colorScheme.primaryContainer
-                )
+                modifier =
+                    Modifier.fillMaxWidth(),
+                shape =
+                    RoundedCornerShape(20.dp),
+                colors =
+                    CardDefaults.cardColors(
+                        containerColor =
+                            MaterialTheme
+                                .colorScheme
+                                .primaryContainer
+                    )
             ) {
 
                 Column(
-                    modifier = Modifier.padding(20.dp),
+                    modifier =
+                        Modifier.padding(20.dp),
                     verticalArrangement =
                         Arrangement.spacedBy(12.dp)
                 ) {
@@ -214,15 +250,22 @@ fun VehicleSearchGatewayScreen(
                                 Icons.Default.Lock,
                             contentDescription = null,
                             tint =
-                                MaterialTheme.colorScheme.primary
+                                MaterialTheme
+                                    .colorScheme
+                                    .primary
                         )
 
                         Text(
-                            text = "Pro Vehicle Search",
+                            text =
+                                "Pro Vehicle Search",
                             modifier =
-                                Modifier.padding(start = 10.dp),
+                                Modifier.padding(
+                                    start = 10.dp
+                                ),
                             style =
-                                MaterialTheme.typography.titleLarge,
+                                MaterialTheme
+                                    .typography
+                                    .titleLarge,
                             fontWeight =
                                 FontWeight.Bold
                         )
@@ -230,20 +273,37 @@ fun VehicleSearchGatewayScreen(
 
                     Text(
                         text =
-                            "The full Hidden History vehicle intelligence experience.",
+                            "The full Hidden History vehicle intelligence search. One Pro Search token unlocks the complete premium analysis for the vehicle.",
                         style =
-                            MaterialTheme.typography.bodyMedium,
-                            color =
-                                MaterialTheme.colorScheme.onSurfaceVariant
+                            MaterialTheme
+                                .typography
+                                .bodyMedium,
+                        color =
+                            MaterialTheme
+                                .colorScheme
+                                .onSurfaceVariant
                     )
 
                     Text(
                         text =
-                            "Includes: DVLA, DVSA/MOT, AI analysis and premium vehicle intelligence.",
+                            "Includes: DVLA • DVSA/MOT • Free Analysis • Gemini Analysis • Other Official Sources",
                         style =
-                            MaterialTheme.typography.bodySmall,
+                            MaterialTheme
+                                .typography
+                                .bodySmall,
                         fontWeight =
                             FontWeight.SemiBold
+                    )
+
+                    Text(
+                        text =
+                            "1 token = 1 Pro Vehicle Search",
+                        style =
+                            MaterialTheme
+                                .typography
+                                .bodySmall,
+                        fontWeight =
+                            FontWeight.Bold
                     )
 
                     Button(
@@ -256,7 +316,9 @@ fun VehicleSearchGatewayScreen(
                         colors =
                             ButtonDefaults.buttonColors(
                                 containerColor =
-                                    MaterialTheme.colorScheme.primary
+                                    MaterialTheme
+                                        .colorScheme
+                                        .primary
                             )
                     ) {
 
@@ -267,9 +329,12 @@ fun VehicleSearchGatewayScreen(
                         )
 
                         Text(
-                            text = "Start Pro Search",
+                            text =
+                                "Start Pro Search",
                             modifier =
-                                Modifier.padding(start = 8.dp)
+                                Modifier.padding(
+                                    start = 8.dp
+                                )
                         )
                     }
                 }

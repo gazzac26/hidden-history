@@ -20,6 +20,7 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonObject
 
+
 /*
  * Temporary local repository.
  *
@@ -40,21 +41,31 @@ object LocalReportRepository {
         _savedReportJsons.asStateFlow()
 
     fun saveReportJson(jsonString: String) {
-        val currentList = _savedReportJsons.value
 
-        if (!currentList.contains(jsonString)) {
+        val currentList =
+            _savedReportJsons.value
+
+        if (
+            !currentList.contains(
+                jsonString
+            )
+        ) {
+
             _savedReportJsons.value =
                 currentList + jsonString
         }
     }
 }
 
+
 class VehicleSearchSavedReports(
     private val hiddenHistoryRepository: HiddenHistoryRepository,
     private val jsonParser: Json
 ) {
 
-    suspend fun loadSavedReports(): List<HiddenHistoryReportEntity> {
+    suspend fun loadSavedReports():
+        List<HiddenHistoryReportEntity> {
+
         val session =
             SupabaseManager.client
                 .auth
@@ -65,12 +76,18 @@ class VehicleSearchSavedReports(
                 ?.user
                 ?.id
 
-        if (userId == null) {
+        if (
+            userId == null
+        ) {
+
             Log.w(
                 "VehicleSearch",
                 "Cannot load saved reports: user is not logged in."
             )
-            throw IllegalStateException("You must be logged in to load saved reports.")
+
+            throw IllegalStateException(
+                "You must be logged in to load saved reports."
+            )
         }
 
         val reports =
@@ -87,6 +104,28 @@ class VehicleSearchSavedReports(
         return reports
     }
 
+    /*
+     * =========================================================
+     * SAVE CURRENT REPORT
+     * =========================================================
+     *
+     * Supports BOTH:
+     *
+     * 1. Full vehicle reports
+     *
+     *    official vehicle JSON
+     *    + optional advert analysis
+     *
+     * 2. Advert-only Pro reports
+     *
+     *    no official vehicle JSON
+     *    + AdvertAnalysis and/or parsed advert
+     *
+     * This is intentionally additive.
+     *
+     * Existing full vehicle report behaviour is preserved.
+     */
+
     suspend fun saveCurrentReport(
         currentRawJson: String?,
         parsedAdvert: com.hiddenhistory.engine.ParsedVehicleAdvert? = null,
@@ -95,14 +134,44 @@ class VehicleSearchSavedReports(
         rawAdvertInput: String? = null
     ): List<HiddenHistoryReportEntity> {
 
-        val jsonString =
-            currentRawJson
+        /*
+         * =========================================================
+         * DETERMINE REPORT TYPE
+         * =========================================================
+         */
 
-        if (jsonString.isNullOrBlank()) {
+        val hasVehicleJson =
+            !currentRawJson.isNullOrBlank()
+
+        val hasAdvertAnalysis =
+            advertAnalysis != null
+
+        val hasParsedAdvert =
+            parsedAdvert != null
+
+        val hasAdvertData =
+            hasAdvertAnalysis ||
+                hasParsedAdvert
+
+        /*
+         * There must be at least one actual report source.
+         */
+
+        if (
+            !hasVehicleJson &&
+            !hasAdvertData
+        ) {
+
             throw IllegalStateException(
-                "No vehicle data available to save."
+                "No report data available to save."
             )
         }
+
+        /*
+         * =========================================================
+         * AUTHENTICATION
+         * =========================================================
+         */
 
         val session =
             SupabaseManager.client
@@ -114,7 +183,10 @@ class VehicleSearchSavedReports(
                 ?.user
                 ?.id
 
-        if (userId == null) {
+        if (
+            userId == null
+        ) {
+
             Log.e(
                 "VehicleSearch",
                 "Save report failed: user is not logged in."
@@ -125,34 +197,100 @@ class VehicleSearchSavedReports(
             )
         }
 
-        val vehicleJson =
-            try {
-                jsonParser
-                    .parseToJsonElement(
-                        jsonString
-                    )
-                    .jsonObject
-            } catch (e: Throwable) {
-                Log.e(
-                    "VehicleSearch",
-                    "Failed to convert vehicle JSON: ${e.message}",
-                    e
-                )
+        /*
+         * =========================================================
+         * VEHICLE JSON
+         * =========================================================
+         *
+         * Full vehicle searches retain the complete official JSON.
+         *
+         * Advert-only searches do not have vehicle JSON, so an empty
+         * JSON object is stored rather than inventing vehicle data.
+         *
+         * This preserves the JSON column's object structure while
+         * making it possible to distinguish an advert-only report
+         * through reportType.
+         */
 
-                throw IllegalStateException(
-                    "The vehicle report could not be prepared for saving."
-                )
+        val vehicleJson =
+            if (
+                hasVehicleJson
+            ) {
+
+                try {
+
+                    jsonParser
+                        .parseToJsonElement(
+                            currentRawJson!!
+                        )
+                        .jsonObject
+
+                } catch (
+                    e: Throwable
+                ) {
+
+                    Log.e(
+                        "VehicleSearch",
+                        "Failed to convert vehicle JSON: ${e.message}",
+                        e
+                    )
+
+                    throw IllegalStateException(
+                        "The vehicle report could not be prepared for saving."
+                    )
+                }
+
+            } else {
+
+                buildJsonObject {}
             }
 
-        val vehicle =
-            runCatching {
-                jsonParser
-                    .decodeFromString<Vehicle>(
-                        jsonString
-                    )
-            }.getOrNull()
+        /*
+         * =========================================================
+         * VEHICLE
+         * =========================================================
+         */
 
-        val registration =
+        val vehicle =
+            if (
+                hasVehicleJson
+            ) {
+
+                runCatching {
+
+                    jsonParser
+                        .decodeFromString<Vehicle>(
+                            currentRawJson!!
+                        )
+
+                }.getOrNull()
+
+            } else {
+
+                null
+            }
+
+        /*
+         * =========================================================
+         * REGISTRATION
+         * =========================================================
+         *
+         * Full vehicle reports continue to use the official vehicle
+         * registration.
+         *
+         * Advert-only reports deliberately do NOT invent a vehicle
+         * registration.
+         *
+         * Because the existing HiddenHistoryReportInsert model expects
+         * a registration value, the advert-only report receives the
+         * explicit marker "ADVERT_ONLY".
+         *
+         * This makes the saved record unambiguous and avoids falsely
+         * associating an advert with a registration that was never
+         * supplied or officially verified.
+         */
+
+        val officialRegistration =
             vehicle
                 ?.registrationNumber
                 ?.takeIf {
@@ -164,7 +302,36 @@ class VehicleSearchSavedReports(
                         it.isNotBlank()
                     }
 
-        if (registration.isNullOrBlank()) {
+        val registration =
+            officialRegistration
+                ?.uppercase()
+                ?: if (
+                    hasAdvertData
+                ) {
+
+                    "ADVERT_ONLY"
+
+                } else {
+
+                    null
+                }
+
+        /*
+         * =========================================================
+         * REGISTRATION VALIDATION
+         * =========================================================
+         *
+         * Only full vehicle reports require a genuine vehicle
+         * registration.
+         *
+         * Advert-only reports are explicitly allowed to continue.
+         */
+
+        if (
+            hasVehicleJson &&
+            registration.isNullOrBlank()
+        ) {
+
             throw IllegalStateException(
                 "Vehicle registration could not be determined."
             )
@@ -174,29 +341,33 @@ class VehicleSearchSavedReports(
          * =========================================================
          * COMPLETE ADVERT ANALYSIS
          * =========================================================
-         *
-         * The AdvertAnalyzer is deliberately saved separately from
-         * the main vehicle intelligence result.
-         *
-         * This keeps Hidden History connected to the advert-analysis
-         * engine only, as required.
          */
+
         val advertJson =
             when {
 
                 advertAnalysis != null ->
+
                     buildAdvertAnalysisJson(
-                        analysis = advertAnalysis,
-                        rawAdvertInput = rawAdvertInput
+                        analysis =
+                            advertAnalysis,
+
+                        rawAdvertInput =
+                            rawAdvertInput
                     )
 
                 parsedAdvert != null ->
+
                     buildAdvertJson(
-                        advert = parsedAdvert,
-                        rawAdvertInput = rawAdvertInput
+                        advert =
+                            parsedAdvert,
+
+                        rawAdvertInput =
+                            rawAdvertInput
                     )
 
                 else ->
+
                     null
             }
 
@@ -205,18 +376,26 @@ class VehicleSearchSavedReports(
          * ADVERT ↔ OFFICIAL CROSS-CHECK
          * =========================================================
          *
-         * This is evidence produced from the advert analysis and the
-         * official vehicle/MOT result. It is not the main intelligence
-         * engine.
+         * This is only present when an official vehicle result
+         * actually exists.
+         *
+         * Advert-only reports correctly have no cross-check.
          */
+
         val crossCheckJson =
             officialCrossCheck?.let {
+
                 buildJsonObject {
+
                     put(
                         "warnings",
                         buildJsonArray {
+
                             it.warnings.forEach { value ->
-                                add(value)
+
+                                add(
+                                    value
+                                )
                             }
                         }
                     )
@@ -224,8 +403,12 @@ class VehicleSearchSavedReports(
                     put(
                         "confirmations",
                         buildJsonArray {
+
                             it.confirmations.forEach { value ->
-                                add(value)
+
+                                add(
+                                    value
+                                )
                             }
                         }
                     )
@@ -233,31 +416,84 @@ class VehicleSearchSavedReports(
                     put(
                         "verificationItems",
                         buildJsonArray {
+
                             it.verificationItems.forEach { value ->
-                                add(value)
+
+                                add(
+                                    value
+                                )
                             }
                         }
                     )
                 }
             }
 
+        /*
+         * =========================================================
+         * VEHICLE CACHE
+         * =========================================================
+         *
+         * Advert-only reports have no official registration, so they
+         * deliberately skip the vehicle cache lookup.
+         */
+
         val vehicleCache =
-            try {
-                hiddenHistoryRepository
-                    .getVehicleCache(
-                        registration.uppercase()
+            if (
+                !registration.isNullOrBlank() &&
+                registration != "ADVERT_ONLY"
+            ) {
+
+                try {
+
+                    hiddenHistoryRepository
+                        .getVehicleCache(
+                            registration
+                        )
+
+                } catch (
+                    cacheError: Throwable
+                ) {
+
+                    Log.w(
+                        "VehicleSearch",
+                        "Vehicle cache lookup failed: ${cacheError.message}"
                     )
-            } catch (cacheError: Throwable) {
-                Log.w(
-                    "VehicleSearch",
-                    "Vehicle cache lookup failed: ${cacheError.message}"
-                )
+
+                    null
+                }
+
+            } else {
 
                 null
             }
 
+        /*
+         * =========================================================
+         * REPORT TYPE
+         * =========================================================
+         */
+
+        val reportType =
+            if (
+                hasVehicleJson
+            ) {
+
+                "FULL_VEHICLE_REPORT"
+
+            } else {
+
+                "PRO_ADVERT_REPORT"
+            }
+
+        /*
+         * =========================================================
+         * REPORT INSERT
+         * =========================================================
+         */
+
         val report =
             HiddenHistoryReportInsert(
+
                 userId =
                     userId,
 
@@ -265,17 +501,17 @@ class VehicleSearchSavedReports(
                     vehicleCache?.id,
 
                 registration =
-                    registration.uppercase(),
+                    registration
+                        ?: "ADVERT_ONLY",
 
                 reportType =
-                    "FULL_VEHICLE_REPORT",
+                    reportType,
 
                 /*
-                 * Keep the COMPLETE official vehicle payload.
+                 * Full official vehicle payload when available.
                  *
-                 * This preserves every field returned by the official
-                 * vehicle search, including fields not represented by
-                 * the Kotlin Vehicle model.
+                 * Advert-only reports receive {} because there is no
+                 * official vehicle payload to store.
                  */
                 vehicleData =
                     vehicleJson,
@@ -297,8 +533,6 @@ class VehicleSearchSavedReports(
 
                 /*
                  * Advert ↔ official vehicle/MOT cross-check.
-                 *
-                 * This is not the removed legacy intelligence result.
                  */
                 languageAnalysis =
                     crossCheckJson,
@@ -322,19 +556,45 @@ class VehicleSearchSavedReports(
                     null
             )
 
+        /*
+         * =========================================================
+         * INSERT INTO SUPABASE
+         * =========================================================
+         */
+
         hiddenHistoryRepository
             .insertUserReport(
                 report
             )
 
         /*
-         * Keep the complete raw vehicle report in the temporary local
-         * cache as well.
+         * =========================================================
+         * LOCAL RAW VEHICLE CACHE
+         * =========================================================
+         *
+         * Only cache raw official vehicle JSON when it actually
+         * exists.
+         *
+         * An advert-only report must not put "{}" into the local
+         * vehicle-report cache and pretend that it is a vehicle
+         * report.
          */
-        LocalReportRepository
-            .saveReportJson(
-                jsonString
-            )
+
+        if (
+            hasVehicleJson
+        ) {
+
+            LocalReportRepository
+                .saveReportJson(
+                    currentRawJson!!
+                )
+        }
+
+        /*
+         * =========================================================
+         * RETURN UPDATED REPORT LIST
+         * =========================================================
+         */
 
         val updatedReports =
             hiddenHistoryRepository
@@ -344,11 +604,19 @@ class VehicleSearchSavedReports(
 
         Log.d(
             "VehicleSearch",
-            "Complete Hidden History report saved for ${registration.uppercase()}."
+            "Complete Hidden History report saved. type=$reportType registration=${
+                registration ?: "ADVERT_ONLY"
+            }"
         )
 
         return updatedReports
     }
+
+    /*
+     * =========================================================
+     * BUILD PRO ADVERT ANALYSIS JSON
+     * =========================================================
+     */
 
     private fun buildAdvertAnalysisJson(
         analysis: AdvertAnalysis,
@@ -357,11 +625,14 @@ class VehicleSearchSavedReports(
 
         val analysisJson =
             runCatching {
+
                 jsonParser
                     .encodeToString(
                         analysis
                     )
+
             }.getOrElse { error ->
+
                 Log.e(
                     "VehicleSearch",
                     "Failed to serialize Pro AdvertAnalysis: ${error.message}",
@@ -375,12 +646,15 @@ class VehicleSearchSavedReports(
 
         val analysisObject =
             runCatching {
+
                 jsonParser
                     .parseToJsonElement(
                         analysisJson
                     )
                     .jsonObject
+
             }.getOrElse { error ->
+
                 Log.e(
                     "VehicleSearch",
                     "Failed to parse serialized Pro AdvertAnalysis: ${error.message}",
@@ -395,6 +669,7 @@ class VehicleSearchSavedReports(
         return buildJsonObject {
 
             analysisObject.forEach { (key, value) ->
+
                 put(
                     key,
                     value
@@ -407,8 +682,11 @@ class VehicleSearchSavedReports(
             )
 
             rawAdvertInput
-                ?.takeIf { it.isNotBlank() }
+                ?.takeIf {
+                    it.isNotBlank()
+                }
                 ?.let {
+
                     put(
                         "rawAdvertInput",
                         it
@@ -426,6 +704,12 @@ class VehicleSearchSavedReports(
         }
     }
 
+    /*
+     * =========================================================
+     * BUILD DETERMINISTIC ADVERT JSON
+     * =========================================================
+     */
+
     private fun buildAdvertJson(
         advert: com.hiddenhistory.engine.ParsedVehicleAdvert,
         rawAdvertInput: String?
@@ -440,14 +724,19 @@ class VehicleSearchSavedReports(
 
             put(
                 "rawAdvertInput",
-                rawAdvertInput ?: advert.rawText
+                rawAdvertInput
+                    ?: advert.rawText
             )
 
             put(
                 "normalizedTokens",
                 buildJsonArray {
+
                     advert.normalizedTokens.forEach {
-                        add(it)
+
+                        add(
+                            it
+                        )
                     }
                 }
             )
@@ -458,35 +747,67 @@ class VehicleSearchSavedReports(
             )
 
             advert.make?.let {
-                put("make", it)
+
+                put(
+                    "make",
+                    it
+                )
             }
 
             advert.model?.let {
-                put("model", it)
+
+                put(
+                    "model",
+                    it
+                )
             }
 
             advert.year?.let {
-                put("year", it)
+
+                put(
+                    "year",
+                    it
+                )
             }
 
             advert.mileage?.let {
-                put("mileage", it)
+
+                put(
+                    "mileage",
+                    it
+                )
             }
 
             advert.price?.let {
-                put("price", it)
+
+                put(
+                    "price",
+                    it
+                )
             }
 
             advert.transmission?.let {
-                put("transmission", it)
+
+                put(
+                    "transmission",
+                    it
+                )
             }
 
             advert.engineSize?.let {
-                put("engineSize", it)
+
+                put(
+                    "engineSize",
+                    it
+                )
             }
 
             advert.fuelType?.let {
-                put("fuelType", it)
+
+                put(
+                    "fuelType",
+                    it
+                )
             }
 
             put(
@@ -502,8 +823,12 @@ class VehicleSearchSavedReports(
             put(
                 "keyInsights",
                 buildJsonArray {
+
                     advert.keyInsights.forEach {
-                        add(it)
+
+                        add(
+                            it
+                        )
                     }
                 }
             )
@@ -511,8 +836,12 @@ class VehicleSearchSavedReports(
             put(
                 "riskFlags",
                 buildJsonArray {
+
                     advert.riskFlags.forEach {
-                        add(it)
+
+                        add(
+                            it
+                        )
                     }
                 }
             )
@@ -520,17 +849,27 @@ class VehicleSearchSavedReports(
             put(
                 "rawExtractedAttributes",
                 buildJsonObject {
-                    advert.rawExtractedAttributes.forEach { (key, value) ->
-                        put(key, value)
-                    }
+
+                    advert.rawExtractedAttributes
+                        .forEach { (key, value) ->
+
+                            put(
+                                key,
+                                value
+                            )
+                        }
                 }
             )
 
             put(
                 "claimsMadeBySeller",
                 buildJsonArray {
+
                     advert.claimsMadeBySeller.forEach {
-                        add(it)
+
+                        add(
+                            it
+                        )
                     }
                 }
             )
@@ -538,8 +877,12 @@ class VehicleSearchSavedReports(
             put(
                 "notableWording",
                 buildJsonArray {
+
                     advert.notableWording.forEach {
-                        add(it)
+
+                        add(
+                            it
+                        )
                     }
                 }
             )
@@ -547,8 +890,12 @@ class VehicleSearchSavedReports(
             put(
                 "missingInformation",
                 buildJsonArray {
+
                     advert.missingInformation.forEach {
-                        add(it)
+
+                        add(
+                            it
+                        )
                     }
                 }
             )
@@ -556,8 +903,12 @@ class VehicleSearchSavedReports(
             put(
                 "inconsistencies",
                 buildJsonArray {
+
                     advert.inconsistencies.forEach {
-                        add(it)
+
+                        add(
+                            it
+                        )
                     }
                 }
             )
@@ -565,8 +916,12 @@ class VehicleSearchSavedReports(
             put(
                 "thingsWorthVerifying",
                 buildJsonArray {
+
                     advert.thingsWorthVerifying.forEach {
-                        add(it)
+
+                        add(
+                            it
+                        )
                     }
                 }
             )
@@ -574,8 +929,12 @@ class VehicleSearchSavedReports(
             put(
                 "questionsTheBuyerShouldAsk",
                 buildJsonArray {
+
                     advert.questionsTheBuyerShouldAsk.forEach {
-                        add(it)
+
+                        add(
+                            it
+                        )
                     }
                 }
             )
@@ -585,12 +944,6 @@ class VehicleSearchSavedReports(
                 advert.overallSummary
             )
 
-            /*
-             * Server created_at remains the authoritative saved
-             * report timestamp. This value is additionally kept inside
-             * the saved advert snapshot so the report itself carries
-             * the save event timestamp.
-             */
             put(
                 "savedAt",
                 java.time.OffsetDateTime
@@ -602,7 +955,16 @@ class VehicleSearchSavedReports(
         }
     }
 
-    suspend fun deleteSavedReport(reportId: String): List<HiddenHistoryReportEntity> {
+    /*
+     * =========================================================
+     * DELETE SAVED REPORT
+     * =========================================================
+     */
+
+    suspend fun deleteSavedReport(
+        reportId: String
+    ): List<HiddenHistoryReportEntity> {
+
         hiddenHistoryRepository
             .deleteUserReport(
                 reportId
@@ -618,9 +980,17 @@ class VehicleSearchSavedReports(
                 ?.user
                 ?.id
 
-        return if (userId != null) {
-            hiddenHistoryRepository.getUserReports(userId)
+        return if (
+            userId != null
+        ) {
+
+            hiddenHistoryRepository
+                .getUserReports(
+                    userId
+                )
+
         } else {
+
             emptyList()
         }
     }

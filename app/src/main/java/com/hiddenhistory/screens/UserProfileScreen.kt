@@ -58,12 +58,11 @@ fun UserProfileScreen(
 
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Personal Info", style = MaterialTheme.typography.titleMedium)
+                    Text("Vehicle Preferences", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    Text("Occupation: ${p.occupation ?: "N/A"}")
-                    Text("DOB: ${p.dateOfBirth ?: "N/A"}")
-                    Text("Bio: ${p.bio ?: "No bio yet"}")
+                    Text("Owned Vehicle: ${p.ownedVehicle ?: "N/A"}")
+                    Text("Preferred Vehicle: ${p.prefVehicle ?: "N/A"}")
                 }
             }
         }

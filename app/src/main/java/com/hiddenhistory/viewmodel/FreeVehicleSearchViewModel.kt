@@ -11,6 +11,7 @@ import com.hiddenhistory.models.HiddenHistoryReportEntity
 import com.hiddenhistory.models.MotTest
 import com.hiddenhistory.models.Vehicle
 import com.hiddenhistory.repository.HiddenHistoryRepository
+import com.hiddenhistory.screens.FreeSearchType
 import com.hiddenhistory.ui.debug.DebugStateHolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -234,7 +235,8 @@ class FreeVehicleSearchViewModel : ViewModel() {
      */
 
     fun processUniversalInput(
-        input: String
+        input: String,
+        searchType: FreeSearchType
     ) {
 
         val trimmed =
@@ -272,20 +274,6 @@ class FreeVehicleSearchViewModel : ViewModel() {
 
             try {
 
-                val isUrl =
-                    trimmed.startsWith(
-                        "http://",
-                        ignoreCase = true
-                    ) ||
-                    trimmed.startsWith(
-                        "https://",
-                        ignoreCase = true
-                    ) ||
-                    trimmed.contains(
-                        "www.",
-                        ignoreCase = true
-                    )
-
                 val compactInput =
                     trimmed.replace(
                         Regex("\\s+"),
@@ -293,7 +281,6 @@ class FreeVehicleSearchViewModel : ViewModel() {
                     )
 
                 val isStandaloneRegistration =
-                    !isUrl &&
                     compactInput.length in 2..8 &&
                     compactInput.all {
                         it.isLetterOrDigit()
@@ -305,56 +292,51 @@ class FreeVehicleSearchViewModel : ViewModel() {
                         it.isDigit()
                     }
 
-                when {
+                when (searchType) {
 
-                    /*
-                     * DIRECT REGISTRATION
-                     */
+                    FreeSearchType.REGISTRATION -> {
+                        if (isStandaloneRegistration) {
+                            stateHolder.parsedAdvert.value = null
+                            stateHolder.mappedAdvertVehicle.value = null
+                            DebugStateHolder.updateAdvert(null)
 
-                    isStandaloneRegistration -> {
-
-                        stateHolder.parsedAdvert.value =
-                            null
-
-                        stateHolder.mappedAdvertVehicle.value =
-                            null
-
-                        DebugStateHolder.updateAdvert(
-                            null
-                        )
-
-                        performSearchInternal(
-
-                            cleanPlate =
-                                compactInput.uppercase(),
-
-                            advert =
-                                null
-                        )
+                            performSearchInternal(
+                                cleanPlate = compactInput.uppercase(),
+                                advert = null
+                            )
+                        } else {
+                            rejectInvalidInput(
+                                "Invalid registration format. Please enter a valid vehicle registration."
+                            )
+                        }
                     }
 
-                    /*
-                     * URL
-                     */
+                    FreeSearchType.ADVERT -> {
+                        // Pure advert analysis: bypasses official lookup and registration requirements entirely.
+                        val processResult = advertProcessor.processAdvert(trimmed)
+                        stateHolder.parsedAdvert.value = processResult.parsed
+                        stateHolder.mappedAdvertVehicle.value = processResult.advertVehicle
+                        DebugStateHolder.updateAdvert(processResult.parsed)
 
-                    isUrl -> {
-
-                        rejectInvalidInput(
-                            "Invalid input. Links and URLs are not accepted here. " +
-                                "Please provide the vehicle registration, or paste " +
-                                "the advert text including the registration."
-                        )
+                        // Clear out official vehicle details as this is an advert-only analysis
+                        _currentVehicle.value = null
+                        stateHolder.uiState.value = emptyList()
+                        stateHolder.currentRawJson.value = null
                     }
 
-                    /*
-                     * ADVERT / OTHER TEXT
-                     */
+                    FreeSearchType.REGISTRATION_AND_ADVERT -> {
+                        if (isStandaloneRegistration) {
+                            stateHolder.parsedAdvert.value = null
+                            stateHolder.mappedAdvertVehicle.value = null
+                            DebugStateHolder.updateAdvert(null)
 
-                    else -> {
-
-                        processAdvertInputInternal(
-                            trimmed
-                        )
+                            performSearchInternal(
+                                cleanPlate = compactInput.uppercase(),
+                                advert = null
+                            )
+                        } else {
+                            processAdvertInputInternal(trimmed)
+                        }
                     }
                 }
 

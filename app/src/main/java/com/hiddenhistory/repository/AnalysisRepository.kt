@@ -23,7 +23,7 @@ class AnalysisRepository(private val profileDao: ProfileDao) {
             )
 
             // 1. Network Update (Supabase)
-            SupabaseManager.client.from("profiles")
+            SupabaseManager.client.from("hidden_history_profiles")
                 .upsert(updatedProfile) {
                     onConflict = "id"
                 }

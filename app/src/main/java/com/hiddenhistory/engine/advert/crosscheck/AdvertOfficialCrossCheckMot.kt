@@ -27,81 +27,26 @@ internal fun compareAdvertAndMot(
 
     /*
      * ---------------------------------------------------------
-     * ADVERTISED MILEAGE
-     * ---------------------------------------------------------
-     */
-
-    val advertisedMileage =
-        extractAdvertMileage(advert.mileage)
-            ?: advert.rawExtractedAttributes["mileage_normalized"]
-                ?.toIntOrNull()
-                ?.takeIf { it > 0 }
-                ?.let {
-                    AdvertMileage(
-                        originalMileage = it,
-                        originalUnit = MileageUnit.MILES,
-                        miles = it
-                    )
-                }
-
-    /*
-     * ---------------------------------------------------------
-     * NO USABLE ADVERT MILEAGE
-     * ---------------------------------------------------------
-     */
-
-    if (advertisedMileage == null) {
-
-        verificationItems.add(
-            "The advert does not contain a usable numerical mileage claim, " +
-                "so mileage could not be cross-checked against official MOT readings."
-        )
-
-        analyseMotDefectPatterns(
-            motTests = motTests,
-            advertText = advertText(advert),
-            warnings = warnings,
-            confirmations = confirmations,
-            verificationItems = verificationItems
-        )
-
-        return AdvertOfficialCrossCheckEngine.CrossCheckResult(
-            warnings = warnings.distinct(),
-            confirmations = confirmations.distinct(),
-            verificationItems = verificationItems.distinct()
-        )
-    }
-
-    /*
-     * ---------------------------------------------------------
      * OFFICIAL MOT MILEAGE READINGS
+     * ---------------------------------------------------------
+     *
+     * Build these before deciding whether the advert contains
+     * mileage.
+     *
+     * This is important because the absence of advert mileage
+     * does NOT mean there is nothing useful to report.
+     *
+     * If the advert does not provide mileage, the latest usable
+     * official MOT reading is reported as factual evidence only.
+     *
+     * It is NOT a warning.
+     * It is NOT a verification requirement.
+     * It is NOT treated as a discrepancy.
      * ---------------------------------------------------------
      */
 
     val officialReadings =
         motTests.mapNotNull(::buildOfficialMileageReading)
-
-    if (officialReadings.isEmpty()) {
-
-        verificationItems.add(
-            "The available MOT history does not contain a usable numerical " +
-                "odometer reading that can be safely compared with the advert."
-        )
-
-        analyseMotDefectPatterns(
-            motTests = motTests,
-            advertText = advertText(advert),
-            warnings = warnings,
-            confirmations = confirmations,
-            verificationItems = verificationItems
-        )
-
-        return AdvertOfficialCrossCheckEngine.CrossCheckResult(
-            warnings = warnings.distinct(),
-            confirmations = confirmations.distinct(),
-            verificationItems = verificationItems.distinct()
-        )
-    }
 
     /*
      * ---------------------------------------------------------
@@ -116,16 +61,8 @@ internal fun compareAdvertAndMot(
      *
      * Never trust the supplied list order.
      *
-     * Only successfully dated readings participate in chronological
-     * regression/latest-reading analysis.
-     *
-     * IMPORTANT:
-     *
-     * Advert-versus-official mileage comparison is deliberately
-     * performed against ALL usable official readings below.
-     *
-     * This means a usable official mileage reading is still capable
-     * of exposing a discrepancy even when its date cannot be parsed.
+     * Only successfully dated readings participate in
+     * chronological latest-reading and regression analysis.
      * ---------------------------------------------------------
      */
 
@@ -157,6 +94,194 @@ internal fun compareAdvertAndMot(
 
     /*
      * ---------------------------------------------------------
+     * ADVERTISED MILEAGE
+     * ---------------------------------------------------------
+     */
+
+    val advertisedMileage =
+        extractAdvertMileage(advert.mileage)
+            ?: advert.rawExtractedAttributes["mileage_normalized"]
+                ?.toIntOrNull()
+                ?.takeIf { it > 0 }
+                ?.let {
+                    AdvertMileage(
+                        originalMileage = it,
+                        originalUnit = MileageUnit.MILES,
+                        miles = it
+                    )
+                }
+
+    /*
+     * ---------------------------------------------------------
+     * NO USABLE ADVERT MILEAGE
+     * ---------------------------------------------------------
+     *
+     * IMPORTANT:
+     *
+     * Missing advert mileage is NOT itself a risk.
+     *
+     * We do not know the seller's current claimed mileage, so
+     * there is nothing to compare against the official record.
+     *
+     * Instead, if a usable official MOT reading exists, report
+     * the latest known official mileage as a factual finding.
+     *
+     * Example:
+     *
+     * Advert: no mileage stated
+     * Latest official MOT: 135,235 miles
+     *
+     * Report:
+     *
+     * "Latest official MOT mileage recorded: 135,235 miles."
+     *
+     * Nothing else is added about the missing advert mileage.
+     * ---------------------------------------------------------
+     */
+
+    if (advertisedMileage == null) {
+
+        if (latestOfficialReading != null) {
+
+            confirmations.add(
+                "Latest official MOT mileage recorded: " +
+                    formatOfficialMileage(latestOfficialReading) +
+                    latestOfficialReading.date
+                        ?.let { " on $it" }
+                        .orEmpty() +
+                    "."
+            )
+        }
+
+        /*
+         * There is no advert mileage to compare, so:
+         *
+         * - no mileage discrepancy warning
+         * - no mileage verification advice
+         * - no mileage confirmation claiming a match
+         *
+         * We still continue with independent MOT analysis below.
+         */
+
+        val regressions =
+            findMileageRegressions(chronologicalReadings)
+
+        regressions.forEach { regression ->
+
+            warnings.add(
+                "Official mileage history contains a possible mileage regression: " +
+                    "an earlier MOT recorded " +
+                    formatOfficialMileage(regression.previous) +
+                    ", while a later MOT recorded " +
+                    formatOfficialMileage(regression.current) +
+                    ". The later reading is approximately " +
+                    "${formatMileage(regression.difference)} miles lower."
+            )
+
+            verificationItems.add(
+                "Investigate the official mileage regression. Ask for service history " +
+                    "and any documentation relating to odometer replacement, correction " +
+                    "or instrument-cluster work before relying on the mileage history."
+            )
+        }
+
+        /*
+         * Same-day fail -> pass retests remain independent MOT
+         * evidence and are still aggregated into one finding.
+         */
+
+        val sameDayRetests =
+            findSameDayFailToPassRetests(motTests)
+
+        if (sameDayRetests.isNotEmpty()) {
+
+            val retestCount =
+                sameDayRetests.size
+
+            warnings.add(
+                "MOT retest pattern detected: the official MOT history contains " +
+                    "$retestCount same-day fail-to-pass retest sequence" +
+                    "${if (retestCount == 1) "" else "s"}."
+            )
+
+            verificationItems.add(
+                "Review the failure items associated with the same-day MOT retest " +
+                    "sequences and establish what was repaired or rectified before purchase. " +
+                    "A later pass does not remove the fact that the earlier tests identified defects."
+            )
+        }
+
+        /*
+         * Defect analysis continues even though there is no advert
+         * mileage to cross-check.
+         */
+
+        analyseMotDefectPatterns(
+            motTests = motTests,
+            advertText = advertText(advert),
+            warnings = warnings,
+            confirmations = confirmations,
+            verificationItems = verificationItems
+        )
+
+        return AdvertOfficialCrossCheckEngine.CrossCheckResult(
+            warnings = warnings
+                .map(String::trim)
+                .filter(String::isNotBlank)
+                .distinct(),
+            confirmations = confirmations
+                .map(String::trim)
+                .filter(String::isNotBlank)
+                .distinct(),
+            verificationItems = verificationItems
+                .map(String::trim)
+                .filter(String::isNotBlank)
+                .distinct()
+        )
+    }
+
+    /*
+     * ---------------------------------------------------------
+     * NO USABLE OFFICIAL MILEAGE
+     * ---------------------------------------------------------
+     *
+     * If the advert DOES contain mileage but the official MOT
+     * history contains no usable numerical odometer reading,
+     * there is no safe comparison to perform.
+     *
+     * This remains a factual limitation rather than a mileage
+     * discrepancy warning.
+     * ---------------------------------------------------------
+     */
+
+    if (officialReadings.isEmpty()) {
+
+        analyseMotDefectPatterns(
+            motTests = motTests,
+            advertText = advertText(advert),
+            warnings = warnings,
+            confirmations = confirmations,
+            verificationItems = verificationItems
+        )
+
+        return AdvertOfficialCrossCheckEngine.CrossCheckResult(
+            warnings = warnings
+                .map(String::trim)
+                .filter(String::isNotBlank)
+                .distinct(),
+            confirmations = confirmations
+                .map(String::trim)
+                .filter(String::isNotBlank)
+                .distinct(),
+            verificationItems = verificationItems
+                .map(String::trim)
+                .filter(String::isNotBlank)
+                .distinct()
+        )
+    }
+
+    /*
+     * ---------------------------------------------------------
      * UNIT NORMALISATION
      * ---------------------------------------------------------
      */
@@ -171,19 +296,10 @@ internal fun compareAdvertAndMot(
      * OFFICIAL READINGS ABOVE ADVERTISED MILEAGE
      * ---------------------------------------------------------
      *
-     * DO NOT restrict this check to chronologicalReadings.
+     * Use ALL usable official readings.
      *
-     * A usable official odometer reading is evidence regardless
-     * of whether its date was successfully parsed.
-     *
-     * This is specifically the advert-vs-official discrepancy check.
-     *
-     * Example:
-     *
-     * Advert: 67,500 miles
-     * Official: 72,000 miles
-     *
-     * This must produce a discrepancy.
+     * A usable official reading is evidence even when its date
+     * cannot be parsed.
      * ---------------------------------------------------------
      */
 
@@ -196,11 +312,6 @@ internal fun compareAdvertAndMot(
 
     if (readingsAboveAdvertisedMileage.isNotEmpty()) {
 
-        /*
-         * Prefer the highest official reading because that gives the
-         * strongest evidence that the advertised mileage is below an
-         * already-recorded official mileage.
-         */
         val strongest =
             readingsAboveAdvertisedMileage.maxByOrNull {
                 it.miles
@@ -232,12 +343,6 @@ internal fun compareAdvertAndMot(
     /*
      * ---------------------------------------------------------
      * LATEST OFFICIAL READING
-     * ---------------------------------------------------------
-     *
-     * The latest reading is determined ONLY from successfully
-     * parsed dates.
-     *
-     * The order supplied by the API/database is irrelevant.
      * ---------------------------------------------------------
      */
 
@@ -280,10 +385,6 @@ internal fun compareAdvertAndMot(
      * ---------------------------------------------------------
      * HISTORICAL EXACT / NEAR MATCH
      * ---------------------------------------------------------
-     *
-     * Use all official readings. A date is not required for a
-     * mileage reading to provide supporting historical evidence.
-     * ---------------------------------------------------------
      */
 
     val matchingReading =
@@ -316,7 +417,6 @@ internal fun compareAdvertAndMot(
      * ---------------------------------------------------------
      *
      * This is not automatically a contradiction.
-     *
      * Mileage can legitimately increase after the latest MOT.
      * ---------------------------------------------------------
      */
@@ -354,15 +454,6 @@ internal fun compareAdvertAndMot(
     /*
      * ---------------------------------------------------------
      * OFFICIAL MILEAGE REGRESSIONS
-     * ---------------------------------------------------------
-     *
-     * ONLY chronological readings are allowed here.
-     *
-     * This prevents the API/database delivery order from being
-     * interpreted as vehicle chronology.
-     *
-     * findMileageRegressions() also protects itself by sorting
-     * chronologically.
      * ---------------------------------------------------------
      */
 
@@ -407,28 +498,6 @@ internal fun compareAdvertAndMot(
      * ---------------------------------------------------------
      * SAME-DAY MOT FAIL -> PASS RETESTS
      * ---------------------------------------------------------
-     *
-     * IMPORTANT:
-     *
-     * The engine still analyses every same-day fail -> pass
-     * sequence internally.
-     *
-     * We deliberately do NOT expose each individual retest date
-     * as a separate warning.
-     *
-     * The user already has the complete MOT history available,
-     * including the individual test dates and results.
-     *
-     * Therefore:
-     *
-     *     1 retest  -> 1 aggregated warning
-     *     5 retests -> 1 aggregated warning
-     *     20 retests -> 1 aggregated warning
-     *
-     * No analytical evidence is removed. Only the presentation
-     * is aggregated so the analysis does not flood the user with
-     * information they can already see in the MOT history.
-     * ---------------------------------------------------------
      */
 
     val sameDayRetests =
@@ -455,13 +524,6 @@ internal fun compareAdvertAndMot(
     /*
      * ---------------------------------------------------------
      * NO MATERIAL MILEAGE CONTRADICTION
-     * ---------------------------------------------------------
-     *
-     * Do not claim that no contradiction exists when an undated
-     * official reading is above the advertised mileage.
-     *
-     * readingsAboveAdvertisedMileage deliberately contains ALL
-     * usable official readings, not only dated readings.
      * ---------------------------------------------------------
      */
 
@@ -502,8 +564,17 @@ internal fun compareAdvertAndMot(
      */
 
     return AdvertOfficialCrossCheckEngine.CrossCheckResult(
-        warnings = warnings.distinct(),
-        confirmations = confirmations.distinct(),
-        verificationItems = verificationItems.distinct()
+        warnings = warnings
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .distinct(),
+        confirmations = confirmations
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .distinct(),
+        verificationItems = verificationItems
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .distinct()
     )
 }

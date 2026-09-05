@@ -21,14 +21,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.hiddenhistory.models.MotTest
+import com.hiddenhistory.models.Vehicle
+import com.hiddenhistory.viewmodel.ProSearchType
 import com.hiddenhistory.viewmodel.ProVehicleSearchViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProVehicleSearchScreen(
+    onNavigateToMotDetails: (MotTest, Vehicle) -> Unit,
     onNavigateBack: () -> Unit,
-    viewModel: ProVehicleSearchViewModel =
-        viewModel()
+    viewModel: ProVehicleSearchViewModel = viewModel()
 ) {
 
     val uiState by
@@ -55,6 +58,18 @@ fun ProVehicleSearchScreen(
         viewModel.saveMessage
             .collectAsStateWithLifecycle()
 
+    val selectedSearchType by
+        viewModel.selectedSearchType
+            .collectAsStateWithLifecycle()
+
+    val registrationInput by
+        viewModel.registrationInput
+            .collectAsStateWithLifecycle()
+
+    val advertInput by
+        viewModel.advertInput
+            .collectAsStateWithLifecycle()
+
     val snackbarHostState =
         remember { SnackbarHostState() }
 
@@ -65,15 +80,11 @@ fun ProVehicleSearchScreen(
         }
     }
 
-    var universalInput by
-        remember {
-            mutableStateOf("")
-        }
-
     Scaffold(
         snackbarHost = {
             SnackbarHost(snackbarHostState)
         },
+
         topBar = {
 
             TopAppBar(
@@ -107,13 +118,24 @@ fun ProVehicleSearchScreen(
                 },
 
                 actions = {
-                    if (!isLoading && (uiState.isNotEmpty() || advertAnalysis != null)) {
+
+                    if (
+                        !isLoading &&
+                        (
+                            uiState.isNotEmpty() ||
+                            advertAnalysis != null
+                        )
+                    ) {
+
                         IconButton(
                             onClick = {
                                 viewModel.saveCurrentReport()
                             },
-                            enabled = !isSaving
+
+                            enabled =
+                                !isSaving
                         ) {
+
                             Icon(
                                 imageVector =
                                     Icons.Default.BookmarkAdd,
@@ -134,9 +156,7 @@ fun ProVehicleSearchScreen(
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .padding(
-                        innerPadding
-                    )
+                    .padding(innerPadding)
                     .verticalScroll(
                         rememberScrollState()
                     )
@@ -179,9 +199,7 @@ fun ProVehicleSearchScreen(
                     modifier =
                         Modifier
                             .fillMaxWidth()
-                            .padding(
-                                16.dp
-                            ),
+                            .padding(16.dp),
 
                     verticalArrangement =
                         Arrangement.spacedBy(
@@ -228,7 +246,7 @@ fun ProVehicleSearchScreen(
 
                     Text(
                         text =
-                            "Use a vehicle registration or paste a vehicle advert containing the registration. Pro Search uses the full vehicle intelligence pathway and Gemini-powered advert analysis.",
+                            "Choose exactly what you want Pro Search to analyse. One successful Pro report uses one Pro Vehicle Search token.",
 
                         style =
                             MaterialTheme
@@ -240,49 +258,276 @@ fun ProVehicleSearchScreen(
 
             /*
              * =========================================================
-             * UNIVERSAL INPUT
+             * SEARCH TYPE
              * =========================================================
              */
 
-            OutlinedTextField(
+            Text(
+                text =
+                    "What do you want to search?",
 
-                value =
-                    universalInput,
+                style =
+                    MaterialTheme
+                        .typography
+                        .titleMedium,
 
-                onValueChange = {
-                    universalInput =
-                        it
-                },
+                fontWeight =
+                    FontWeight.Bold
+            )
 
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .height(
-                            120.dp
-                        ),
-
-                label = {
-
-                    Text(
-                        "Enter Reg or paste vehicle advert..."
-                    )
-                },
-
-                placeholder = {
-
-                    Text(
-                        "Example: AB12 CDE or paste the full advert text containing the registration."
-                    )
-                },
+            ProSearchTypeSelector(
+                selectedType =
+                    selectedSearchType,
 
                 enabled =
                     !isLoading,
 
-                shape =
-                    RoundedCornerShape(
-                        12.dp
-                    )
+                onTypeSelected = {
+                    viewModel.selectSearchType(it)
+                }
             )
+
+            /*
+             * =========================================================
+             * SEARCH TYPE DESCRIPTION
+             * =========================================================
+             */
+
+            selectedSearchType?.let { type ->
+
+                Card(
+                    modifier =
+                        Modifier.fillMaxWidth(),
+
+                    colors =
+                        CardDefaults.cardColors(
+                            containerColor =
+                                MaterialTheme
+                                    .colorScheme
+                                    .surfaceVariant
+                        )
+                ) {
+
+                    Text(
+                        text =
+                            when (type) {
+
+                                ProSearchType.REGISTRATION ->
+                                    "Registration Search: DVLA + DVSA/MOT + the existing free vehicle analysis pathway."
+
+                                ProSearchType.ADVERT ->
+                                    "Advert Search: free deterministic advert analysis + Gemini-powered advert analysis. No official vehicle lookup is performed."
+
+                                ProSearchType.REGISTRATION_AND_ADVERT ->
+                                    "Registration + Advert Search: DVLA + DVSA/MOT + free vehicle analysis + free advert analysis + Gemini-powered advert analysis."
+                            },
+
+                        modifier =
+                            Modifier.padding(
+                                14.dp
+                            ),
+
+                        style =
+                            MaterialTheme
+                                .typography
+                                .bodyMedium
+                    )
+                }
+            }
+
+            /*
+             * =========================================================
+             * REGISTRATION INPUT
+             * =========================================================
+             */
+
+            if (
+                selectedSearchType ==
+                    ProSearchType.REGISTRATION ||
+                selectedSearchType ==
+                    ProSearchType.REGISTRATION_AND_ADVERT
+            ) {
+
+                OutlinedTextField(
+
+                    value =
+                        registrationInput,
+
+                    onValueChange = {
+                        viewModel.updateRegistrationInput(
+                            it
+                        )
+                    },
+
+                    modifier =
+                        Modifier.fillMaxWidth(),
+
+                    label = {
+                        Text(
+                            "Vehicle registration"
+                        )
+                    },
+
+                    placeholder = {
+                        Text(
+                            "Example: AB12 CDE"
+                        )
+                    },
+
+                    enabled =
+                        !isLoading,
+
+                    singleLine =
+                        true,
+
+                    shape =
+                        RoundedCornerShape(
+                            12.dp
+                        )
+                )
+            }
+
+            /*
+             * =========================================================
+             * ADVERT INPUT
+             * =========================================================
+             */
+
+            if (
+                selectedSearchType ==
+                    ProSearchType.ADVERT ||
+                selectedSearchType ==
+                    ProSearchType.REGISTRATION_AND_ADVERT
+            ) {
+
+                OutlinedTextField(
+
+                    value =
+                        advertInput,
+
+                    onValueChange = {
+                        viewModel.updateAdvertInput(
+                            it
+                        )
+                    },
+
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .height(
+                                220.dp
+                            ),
+
+                    label = {
+
+                        Text(
+                            if (
+                                selectedSearchType ==
+                                    ProSearchType.REGISTRATION_AND_ADVERT
+                            ) {
+                                "Vehicle advert"
+                            } else {
+                                "Paste vehicle advert"
+                            }
+                        )
+                    },
+
+                    placeholder = {
+
+                        Text(
+                            "Paste the full vehicle advert here..."
+                        )
+                    },
+
+                    enabled =
+                        !isLoading,
+
+                    shape =
+                        RoundedCornerShape(
+                            12.dp
+                        )
+                )
+            }
+
+            /*
+             * =========================================================
+             * TOKEN / SEARCH INFORMATION
+             * =========================================================
+             */
+
+            if (
+                selectedSearchType != null
+            ) {
+
+                Card(
+                    modifier =
+                        Modifier.fillMaxWidth(),
+
+                    colors =
+                        CardDefaults.cardColors(
+                            containerColor =
+                                MaterialTheme
+                                    .colorScheme
+                                    .primaryContainer.copy(
+                                        alpha = 0.45f
+                                    )
+                        )
+                ) {
+
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+
+                        horizontalArrangement =
+                            Arrangement.spacedBy(
+                                10.dp
+                            ),
+
+                        verticalAlignment =
+                            Alignment.CenterVertically
+                    ) {
+
+                        Icon(
+                            imageVector =
+                                Icons.Default.Lock,
+
+                            contentDescription =
+                                null,
+
+                            tint =
+                                MaterialTheme
+                                    .colorScheme
+                                    .primary
+                        )
+
+                        Column(
+                            modifier =
+                                Modifier.weight(1f)
+                        ) {
+
+                            Text(
+                                text =
+                                    "1 Pro Vehicle Search token",
+
+                                fontWeight =
+                                    FontWeight.Bold
+                            )
+
+                            Text(
+                                text =
+                                    "The token is only consumed if the selected Pro report is successfully generated. If the report fails, the held token is refunded.",
+
+                                style =
+                                    MaterialTheme
+                                        .typography
+                                        .bodySmall
+                            )
+                        }
+                    }
+                }
+            }
 
             /*
              * =========================================================
@@ -294,10 +539,27 @@ fun ProVehicleSearchScreen(
 
                 onClick = {
 
-                    viewModel
-                        .processUniversalInput(
-                            universalInput
-                        )
+                    when (
+                        selectedSearchType
+                    ) {
+
+                        ProSearchType.REGISTRATION -> {
+
+                            viewModel.processRegistrationSearch()
+                        }
+
+                        ProSearchType.ADVERT -> {
+
+                            viewModel.processAdvertSearch()
+                        }
+
+                        ProSearchType.REGISTRATION_AND_ADVERT -> {
+
+                            viewModel.processRegistrationAndAdvertSearch()
+                        }
+
+                        null -> Unit
+                    }
                 },
 
                 modifier =
@@ -308,8 +570,8 @@ fun ProVehicleSearchScreen(
                         ),
 
                 enabled =
-                    universalInput.isNotBlank() &&
-                        !isLoading,
+                    !isLoading &&
+                    viewModel.canStartSelectedSearch(),
 
                 shape =
                     RoundedCornerShape(
@@ -377,20 +639,25 @@ fun ProVehicleSearchScreen(
 
             /*
              * =========================================================
-             * SAVE REPORT BUTTON (Styled)
+             * SAVE REPORT BUTTON
              * =========================================================
              */
 
             if (
                 !isLoading &&
-                (uiState.isNotEmpty() || advertAnalysis != null)
+                (
+                    uiState.isNotEmpty() ||
+                    advertAnalysis != null
+                )
             ) {
 
                 Surface(
                     modifier =
                         Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp),
+                            .padding(
+                                vertical = 4.dp
+                            ),
 
                     shape =
                         RoundedCornerShape(
@@ -412,14 +679,15 @@ fun ProVehicleSearchScreen(
                     OutlinedButton(
 
                         onClick = {
-                            viewModel
-                                .saveCurrentReport()
+                            viewModel.saveCurrentReport()
                         },
 
                         modifier =
                             Modifier
                                 .fillMaxWidth()
-                                .height(52.dp)
+                                .height(
+                                    52.dp
+                                )
                                 .padding(2.dp),
 
                         enabled =
@@ -447,9 +715,11 @@ fun ProVehicleSearchScreen(
                             ),
 
                         border =
-                            ButtonDefaults.outlinedButtonBorder.copy(
-                                width = 1.dp
-                            )
+                            ButtonDefaults
+                                .outlinedButtonBorder
+                                .copy(
+                                    width = 1.dp
+                                )
                     ) {
 
                         if (
@@ -530,7 +800,6 @@ fun ProVehicleSearchScreen(
                 }
             }
 
-
             /*
              * =========================================================
              * LOADING
@@ -591,7 +860,22 @@ fun ProVehicleSearchScreen(
 
                         Text(
                             text =
-                                "Official vehicle data and, where supplied, the vehicle advert are being analysed.",
+                                when (
+                                    selectedSearchType
+                                ) {
+
+                                    ProSearchType.REGISTRATION ->
+                                        "Retrieving official vehicle data and running the vehicle intelligence pathway."
+
+                                    ProSearchType.ADVERT ->
+                                        "Running deterministic advert analysis and Gemini advert analysis."
+
+                                    ProSearchType.REGISTRATION_AND_ADVERT ->
+                                        "Retrieving official vehicle data and analysing the supplied advert."
+
+                                    null ->
+                                        "Processing..."
+                                },
 
                             style =
                                 MaterialTheme
@@ -619,12 +903,6 @@ fun ProVehicleSearchScreen(
                         true
                 ) {
 
-                    /*
-                     * -------------------------------------------------
-                     * ADVERT TITLE
-                     * -------------------------------------------------
-                     */
-
                     analysis.advertTitle?.let { title ->
 
                         Card(
@@ -632,13 +910,12 @@ fun ProVehicleSearchScreen(
                                 Modifier.fillMaxWidth(),
 
                             colors =
-                                CardDefaults
-                                    .cardColors(
-                                        containerColor =
-                                            MaterialTheme
-                                                .colorScheme
-                                                .surfaceVariant
-                                    )
+                                CardDefaults.cardColors(
+                                    containerColor =
+                                        MaterialTheme
+                                            .colorScheme
+                                            .surfaceVariant
+                                )
                         ) {
 
                             Column(
@@ -686,12 +963,6 @@ fun ProVehicleSearchScreen(
                         }
                     }
 
-                    /*
-                     * -------------------------------------------------
-                     * REGISTRATION
-                     * -------------------------------------------------
-                     */
-
                     analysis.registrationNumber?.let { reg ->
 
                         ProAnalysisDetailCard(
@@ -702,12 +973,6 @@ fun ProVehicleSearchScreen(
                                 reg
                         )
                     }
-
-                    /*
-                     * -------------------------------------------------
-                     * PRICE
-                     * -------------------------------------------------
-                     */
 
                     analysis.price?.let { price ->
 
@@ -720,12 +985,6 @@ fun ProVehicleSearchScreen(
                         )
                     }
 
-                    /*
-                     * -------------------------------------------------
-                     * MILEAGE
-                     * -------------------------------------------------
-                     */
-
                     analysis.mileage?.let { mileage ->
 
                         ProAnalysisDetailCard(
@@ -736,12 +995,6 @@ fun ProVehicleSearchScreen(
                                 mileage
                         )
                     }
-
-                    /*
-                     * -------------------------------------------------
-                     * VEHICLE DETAILS
-                     * -------------------------------------------------
-                     */
 
                     analysis.vehicleDetails
                         ?.takeIf {
@@ -760,12 +1013,6 @@ fun ProVehicleSearchScreen(
                             )
                         }
 
-                    /*
-                     * -------------------------------------------------
-                     * SELLER INFORMATION
-                     * -------------------------------------------------
-                     */
-
                     analysis.sellerInformation
                         ?.takeIf {
                             it.isNotBlank()
@@ -781,12 +1028,6 @@ fun ProVehicleSearchScreen(
                             )
                         }
 
-                    /*
-                     * -------------------------------------------------
-                     * CLAIMS
-                     * -------------------------------------------------
-                     */
-
                     if (
                         analysis
                             .claimsMadeBySeller
@@ -798,16 +1039,9 @@ fun ProVehicleSearchScreen(
                                 "Claims Made By Seller",
 
                             items =
-                                analysis
-                                    .claimsMadeBySeller
+                                analysis.claimsMadeBySeller
                         )
                     }
-
-                    /*
-                     * -------------------------------------------------
-                     * NOTABLE WORDING
-                     * -------------------------------------------------
-                     */
 
                     if (
                         analysis
@@ -820,16 +1054,9 @@ fun ProVehicleSearchScreen(
                                 "Notable Wording",
 
                             items =
-                                analysis
-                                    .notableWording
+                                analysis.notableWording
                         )
                     }
-
-                    /*
-                     * -------------------------------------------------
-                     * THINGS TO VERIFY
-                     * -------------------------------------------------
-                     */
 
                     if (
                         analysis
@@ -842,16 +1069,9 @@ fun ProVehicleSearchScreen(
                                 "Things To Check",
 
                             items =
-                                analysis
-                                    .thingsWorthVerifying
+                                analysis.thingsWorthVerifying
                         )
                     }
-
-                    /*
-                     * -------------------------------------------------
-                     * MISSING INFORMATION
-                     * -------------------------------------------------
-                     */
 
                     if (
                         analysis
@@ -864,16 +1084,9 @@ fun ProVehicleSearchScreen(
                                 "Missing Information",
 
                             items =
-                                analysis
-                                    .missingInformation
+                                analysis.missingInformation
                         )
                     }
-
-                    /*
-                     * -------------------------------------------------
-                     * INCONSISTENCIES
-                     * -------------------------------------------------
-                     */
 
                     if (
                         analysis
@@ -886,16 +1099,9 @@ fun ProVehicleSearchScreen(
                                 "Inconsistencies Found",
 
                             items =
-                                analysis
-                                    .inconsistencies
+                                analysis.inconsistencies
                         )
                     }
-
-                    /*
-                     * -------------------------------------------------
-                     * QUESTIONS
-                     * -------------------------------------------------
-                     */
 
                     if (
                         analysis
@@ -908,16 +1114,9 @@ fun ProVehicleSearchScreen(
                                 "Questions To Ask The Seller",
 
                             items =
-                                analysis
-                                    .questionsTheBuyerShouldAsk
+                                analysis.questionsTheBuyerShouldAsk
                         )
                     }
-
-                    /*
-                     * -------------------------------------------------
-                     * OVERALL SUMMARY
-                     * -------------------------------------------------
-                     */
 
                     analysis.overallSummary
                         ?.takeIf {
@@ -1013,10 +1212,13 @@ fun ProVehicleSearchScreen(
                                     onMotTestClick = {
                                         motTest ->
 
-                                        viewModel
-                                            .selectMotTest(
-                                                motTest
+                                        currentVehicle?.let { vehicle ->
+
+                                            onNavigateToMotDetails(
+                                                motTest,
+                                                vehicle
                                             )
+                                        }
                                     }
                                 )
                             }
@@ -1035,14 +1237,15 @@ fun ProVehicleSearchScreen(
 
             /*
              * =========================================================
-             * ADVERT WITHOUT REGISTRATION
+             * ADVERT-ONLY WITHOUT OFFICIAL LOOKUP
              * =========================================================
              */
 
             if (
                 !isLoading &&
-                advertAnalysis != null &&
-                currentVehicle == null
+                selectedSearchType ==
+                    ProSearchType.ADVERT &&
+                advertAnalysis != null
             ) {
 
                 Card(
@@ -1074,7 +1277,7 @@ fun ProVehicleSearchScreen(
 
                         Text(
                             text =
-                                "The advert was analysed, but an official vehicle lookup could not be performed because a registration was not available.",
+                                "This was an Advert Search. No DVLA or DVSA/MOT lookup was requested, so the report is based on the supplied advert, deterministic advert analysis and Gemini analysis.",
 
                             style =
                                 MaterialTheme
@@ -1108,13 +1311,12 @@ fun ProVehicleSearchScreen(
                                 Modifier.fillMaxWidth(),
 
                             colors =
-                                CardDefaults
-                                    .cardColors(
-                                        containerColor =
-                                            MaterialTheme
-                                                .colorScheme
-                                                .errorContainer
-                                    )
+                                CardDefaults.cardColors(
+                                    containerColor =
+                                        MaterialTheme
+                                            .colorScheme
+                                            .errorContainer
+                                )
                         ) {
 
                             Text(
@@ -1190,7 +1392,7 @@ fun ProVehicleSearchScreen(
 
                         Text(
                             text =
-                                "Enter a registration or paste a vehicle advert containing the registration.",
+                                "Choose a Pro Search type above to begin.",
 
                             style =
                                 MaterialTheme
@@ -1207,6 +1409,216 @@ fun ProVehicleSearchScreen(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+
+/*
+ * =====================================================================
+ * PRO SEARCH TYPE SELECTOR
+ * =====================================================================
+ */
+
+@Composable
+private fun ProSearchTypeSelector(
+    selectedType: ProSearchType?,
+    enabled: Boolean,
+    onTypeSelected: (ProSearchType) -> Unit
+) {
+
+    Column(
+        modifier =
+            Modifier.fillMaxWidth(),
+
+        verticalArrangement =
+            Arrangement.spacedBy(
+                8.dp
+            )
+    ) {
+
+        ProSearchTypeCard(
+            type =
+                ProSearchType.REGISTRATION,
+
+            title =
+                "Registration Search",
+
+            description =
+                "DVLA + DVSA/MOT + vehicle analysis",
+
+            selected =
+                selectedType ==
+                    ProSearchType.REGISTRATION,
+
+            enabled =
+                enabled,
+
+            onClick = {
+                onTypeSelected(
+                    ProSearchType.REGISTRATION
+                )
+            }
+        )
+
+        ProSearchTypeCard(
+            type =
+                ProSearchType.ADVERT,
+
+            title =
+                "Advert Search",
+
+            description =
+                "Free advert analysis + Gemini",
+
+            selected =
+                selectedType ==
+                    ProSearchType.ADVERT,
+
+            enabled =
+                enabled,
+
+            onClick = {
+                onTypeSelected(
+                    ProSearchType.ADVERT
+                )
+            }
+        )
+
+        ProSearchTypeCard(
+            type =
+                ProSearchType.REGISTRATION_AND_ADVERT,
+
+            title =
+                "Registration + Advert",
+
+            description =
+                "Official vehicle data + free analysis + Gemini",
+
+            selected =
+                selectedType ==
+                    ProSearchType.REGISTRATION_AND_ADVERT,
+
+            enabled =
+                enabled,
+
+            onClick = {
+                onTypeSelected(
+                    ProSearchType.REGISTRATION_AND_ADVERT
+                )
+            }
+        )
+    }
+}
+
+
+/*
+ * =====================================================================
+ * PRO SEARCH TYPE CARD
+ * =====================================================================
+ */
+
+@Composable
+private fun ProSearchTypeCard(
+    type: ProSearchType,
+    title: String,
+    description: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+
+    Card(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable(
+                    enabled =
+                        enabled,
+                    onClick =
+                        onClick
+                ),
+
+        shape =
+            RoundedCornerShape(
+                14.dp
+            ),
+
+        colors =
+            CardDefaults.cardColors(
+                containerColor =
+                    if (
+                        selected
+                    ) {
+                        MaterialTheme
+                            .colorScheme
+                            .primaryContainer
+                    } else {
+                        MaterialTheme
+                            .colorScheme
+                            .surfaceVariant
+                    }
+            )
+    ) {
+
+        Row(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        14.dp
+                    ),
+
+            verticalAlignment =
+                Alignment.CenterVertically
+        ) {
+
+            RadioButton(
+                selected =
+                    selected,
+
+                onClick =
+                    if (
+                        enabled
+                    ) {
+                        onClick
+                    } else {
+                        null
+                    }
+            )
+
+            Column(
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .padding(
+                            start = 8.dp
+                        )
+            ) {
+
+                Text(
+                    text =
+                        title,
+
+                    style =
+                        MaterialTheme
+                            .typography
+                            .titleMedium,
+
+                    fontWeight =
+                        FontWeight.Bold
+                )
+
+                Text(
+                    text =
+                        description,
+
+                    style =
+                        MaterialTheme
+                            .typography
+                            .bodySmall
+                )
             }
         }
     }

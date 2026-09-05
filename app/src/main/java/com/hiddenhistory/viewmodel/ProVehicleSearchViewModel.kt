@@ -3,12 +3,12 @@ package com.hiddenhistory.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.hiddenhistory.billing.VehicleReportTokenManager
 import com.hiddenhistory.data.SupabaseManager
 import com.hiddenhistory.engine.AdvertParserEngine
 import com.hiddenhistory.engine.advert.crosscheck.AdvertOfficialCrossCheckEngine
 import com.hiddenhistory.models.AdvertAnalysis
 import com.hiddenhistory.models.MotTest
-import com.hiddenhistory.models.SymptomReport
 import com.hiddenhistory.models.Vehicle
 import com.hiddenhistory.repository.AdvertAnalysisRepository
 import com.hiddenhistory.repository.HiddenHistoryRepository
@@ -19,6 +19,22 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
+import io.github.jan.supabase.auth.auth
+
+/*
+ * =====================================================================
+ * PRO SEARCH TYPE
+ * =====================================================================
+ */
+
+enum class ProSearchType {
+
+    REGISTRATION,
+
+    ADVERT,
+
+    REGISTRATION_AND_ADVERT
+}
 
 data class ProVehicleSearchResult(
     val summary: String,
@@ -26,6 +42,57 @@ data class ProVehicleSearchResult(
 )
 
 class ProVehicleSearchViewModel : ViewModel() {
+
+    /*
+     * =========================================================
+     * PRO TOKEN SYSTEM
+     * =========================================================
+     */
+
+    private val tokenManager =
+        VehicleReportTokenManager()
+
+    private var heldProSearchTokenId: String? =
+        null
+
+    /*
+     * =========================================================
+     * SELECTED PRO SEARCH TYPE
+     * =========================================================
+     */
+
+    private val _selectedSearchType =
+        MutableStateFlow<ProSearchType?>(null)
+
+    val selectedSearchType:
+        StateFlow<ProSearchType?> =
+        _selectedSearchType.asStateFlow()
+
+    /*
+     * =========================================================
+     * REGISTRATION INPUT
+     * =========================================================
+     */
+
+    private val _registrationInput =
+        MutableStateFlow("")
+
+    val registrationInput:
+        StateFlow<String> =
+        _registrationInput.asStateFlow()
+
+    /*
+     * =========================================================
+     * ADVERT INPUT
+     * =========================================================
+     */
+
+    private val _advertInput =
+        MutableStateFlow("")
+
+    val advertInput:
+        StateFlow<String> =
+        _advertInput.asStateFlow()
 
     /*
      * =========================================================
@@ -78,15 +145,6 @@ class ProVehicleSearchViewModel : ViewModel() {
      * =========================================================
      * LEGACY ANALYSIS RESULT STATE
      * =========================================================
-     *
-     * Retained for compatibility with existing callers.
-     *
-     * IMPORTANT:
-     *
-     * Pro Search no longer generates the removed legacy vehicle intelligence result through the
-     * old AutoApp intelligence pipeline.
-     *
-     * Pro analysis is now provided by AdvertAnalysis.
      */
 
     private val _currentAnalysisResult =
@@ -111,23 +169,8 @@ class ProVehicleSearchViewModel : ViewModel() {
 
     /*
      * =========================================================
-     * ADVERT ANALYSIS
+     * PRO ADVERT ANALYSIS
      * =========================================================
-     *
-     * This is the actual Pro analysis result.
-     *
-     * Pro Search uses the SAME AdvertAnalysisRepository used by
-     * AdvertAnalysisViewModel.
-     *
-     * Therefore both pathways ultimately use:
-     *
-     * AdvertAnalysisRepository
-     *          ↓
-     * Supabase
-     *          ↓
-     * analyse-advert Edge Function
-     *
-     * There is NO AutoApp intelligence coordinator involved.
      */
 
     private val _advertAnalysis =
@@ -139,7 +182,7 @@ class ProVehicleSearchViewModel : ViewModel() {
 
     /*
      * =========================================================
-     * RAW INPUT
+     * RAW ADVERT INPUT
      * =========================================================
      */
 
@@ -172,6 +215,19 @@ class ProVehicleSearchViewModel : ViewModel() {
 
     /*
      * =========================================================
+     * CAN SAVE CURRENT REPORT
+     * =========================================================
+     */
+
+    private val _canSaveCurrentReport =
+        MutableStateFlow(false)
+
+    val canSaveCurrentReport:
+        StateFlow<Boolean> =
+        _canSaveCurrentReport.asStateFlow()
+
+    /*
+     * =========================================================
      * NETWORK / JSON
      * =========================================================
      */
@@ -189,11 +245,6 @@ class ProVehicleSearchViewModel : ViewModel() {
      * =========================================================
      * OFFICIAL VEHICLE LOOKUP
      * =========================================================
-     *
-     * This is ONLY responsible for retrieving the official
-     * DVLA + DVSA/MOT vehicle payload.
-     *
-     * It does NOT perform analysis.
      */
 
     private val officialLookup =
@@ -205,17 +256,6 @@ class ProVehicleSearchViewModel : ViewModel() {
      * =========================================================
      * ADVERT ANALYSIS REPOSITORY
      * =========================================================
-     *
-     * IMPORTANT:
-     *
-     * This is the same repository used by AdvertAnalysisViewModel.
-     *
-     * We deliberately do NOT create or instantiate an
-     * AdvertAnalysisViewModel here.
-     *
-     * ViewModels should not depend directly on other ViewModels.
-     *
-     * Both ViewModels use the same repository / Edge Function.
      */
 
     private val advertAnalysisRepository =
@@ -223,8 +263,20 @@ class ProVehicleSearchViewModel : ViewModel() {
             SupabaseManager.client
         )
 
+    /*
+     * =========================================================
+     * EXISTING ADVERT ENGINE
+     * =========================================================
+     */
+
     private val advertParser =
         AdvertParserEngine()
+
+    /*
+     * =========================================================
+     * OFFICIAL CROSS-CHECK
+     * =========================================================
+     */
 
     private val advertOfficialCrossCheckEngine =
         AdvertOfficialCrossCheckEngine()
@@ -233,16 +285,6 @@ class ProVehicleSearchViewModel : ViewModel() {
      * =========================================================
      * HIDDEN HISTORY SAVE PATH
      * =========================================================
-     *
-     * Existing permanent Hidden History storage pathway:
-     *
-     * ProVehicleSearchViewModel
-     *          ↓
-     * VehicleSearchSavedReports
-     *          ↓
-     * HiddenHistoryRepository
-     *          ↓
-     * Supabase
      */
 
     private val hiddenHistoryRepository =
@@ -261,48 +303,221 @@ class ProVehicleSearchViewModel : ViewModel() {
 
     /*
      * =========================================================
-     * REGISTRATION EXTRACTION
+     * UK REGISTRATION VALIDATION
      * =========================================================
      */
 
-    private val ukRegPattern =
+    private val ukModernRegPattern =
         Regex(
             pattern =
-                "\\b(?:[A-Z]{2}[0-9]{2}\\s?[A-Z]{3}|[A-Z]{1}[0-9]{1,3}[A-Z]{3}|[A-Z]{3}[0-9]{1,3}[A-Z]{1}|[A-Z]{1,3}[0-9]{1,3}|[0-9]{1,4}[A-Z]{1,2}|[A-Z]{1,2}[0-9]{1,4}|[A-Z]{3}[0-9]{1,3}[A-Z])\\b",
+                """^[A-Z]{2}[0-9]{2}[A-Z]{3}$""",
 
-            option =
-                RegexOption.IGNORE_CASE
+            options =
+                setOf(
+                    RegexOption.IGNORE_CASE
+                )
         )
 
-        private fun extractRegistration(
-        text: String
-    ): String? {
+    /*
+     * =========================================================
+     * SELECT SEARCH TYPE
+     * =========================================================
+     */
 
-        val match =
-            ukRegPattern.find(
-                text
-            )
+    fun selectSearchType(
+        type: ProSearchType
+    ) {
 
-        val candidate = match
-            ?.value
-            ?.uppercase()
-            ?.replace(
+        if (
+            _isLoading.value
+        ) {
+            return
+        }
+
+        _selectedSearchType.value =
+            type
+
+        clearResultsForNewSearch()
+    }
+
+    /*
+     * =========================================================
+     * UPDATE REGISTRATION
+     * =========================================================
+     */
+
+    fun updateRegistrationInput(
+        input: String
+    ) {
+
+        if (
+            _isLoading.value
+        ) {
+            return
+        }
+
+        _registrationInput.value =
+            input.uppercase()
+    }
+
+    /*
+     * =========================================================
+     * UPDATE ADVERT
+     * =========================================================
+     */
+
+    fun updateAdvertInput(
+        input: String
+    ) {
+
+        if (
+            _isLoading.value
+        ) {
+            return
+        }
+
+        _advertInput.value =
+            input
+
+        _rawAdvertInput.value =
+            input
+    }
+
+    /*
+     * =========================================================
+     * COMPATIBILITY METHOD
+     * =========================================================
+     */
+
+    fun updateRawAdvertInput(
+        input: String
+    ) {
+
+        updateAdvertInput(
+            input
+        )
+    }
+
+    /*
+     * =========================================================
+     * CAN START SELECTED SEARCH
+     * =========================================================
+     */
+
+    fun canStartSelectedSearch(): Boolean {
+
+        return when (
+            _selectedSearchType.value
+        ) {
+
+            ProSearchType.REGISTRATION -> {
+
+                isValidRegistration(
+                    _registrationInput.value
+                )
+            }
+
+            ProSearchType.ADVERT -> {
+
+                _advertInput.value
+                    .trim()
+                    .isNotBlank()
+            }
+
+            ProSearchType.REGISTRATION_AND_ADVERT -> {
+
+                isValidRegistration(
+                    _registrationInput.value
+                ) &&
+                    _advertInput.value
+                        .trim()
+                        .isNotBlank()
+            }
+
+            null -> {
+
+                false
+            }
+        }
+    }
+
+    /*
+     * =========================================================
+     * REGISTRATION VALIDATION
+     * =========================================================
+     */
+
+    private fun isValidRegistration(
+        registration: String
+    ): Boolean {
+
+        val compact =
+            registration
+                .replace(
+                    Regex("\\s+"),
+                    ""
+                )
+                .uppercase()
+
+        return ukModernRegPattern.matches(
+            compact
+        )
+    }
+
+    /*
+     * =========================================================
+     * NORMALISE REGISTRATION
+     * =========================================================
+     */
+
+    private fun normaliseRegistration(
+        registration: String
+    ): String {
+
+        return registration
+            .trim()
+            .replace(
                 Regex("\\s+"),
                 ""
             )
-
-        // Prevent engine capacities like "2.0L" from being extracted as registrations
-        if (
-            candidate.isNullOrBlank() ||
-            candidate.length < 5 ||
-            candidate.contains("L") && candidate.length <= 3
-        ) {
-            return null
-        }
-
-        return candidate
+            .uppercase()
     }
 
+    /*
+     * =========================================================
+     * CLEAR RESULTS
+     * =========================================================
+     */
+
+    private fun clearResultsForNewSearch() {
+
+        _result.value =
+            null
+
+        _uiState.value =
+            emptyList()
+
+        _currentVehicle.value =
+            null
+
+        _currentAnalysisResult.value =
+            null
+
+        _currentRawJson.value =
+            null
+
+        _advertAnalysis.value =
+            null
+
+        _selectedMotTest.value =
+            null
+
+        _saveMessage.value =
+            null
+
+        _canSaveCurrentReport.value =
+            false
+    }
 
     /*
      * =========================================================
@@ -320,20 +535,6 @@ class ProVehicleSearchViewModel : ViewModel() {
 
     /*
      * =========================================================
-     * UPDATE INPUT
-     * =========================================================
-     */
-
-    fun updateRawAdvertInput(
-        input: String
-    ) {
-
-        _rawAdvertInput.value =
-            input
-    }
-
-    /*
-     * =========================================================
      * CLEAR SAVE MESSAGE
      * =========================================================
      */
@@ -346,12 +547,27 @@ class ProVehicleSearchViewModel : ViewModel() {
 
     /*
      * =========================================================
+     * DETERMINE WHETHER CURRENT REPORT IS SAVEABLE
+     * =========================================================
+     */
+
+    private fun hasSaveableReport(): Boolean {
+
+        val hasOfficialVehicleReport =
+            _currentVehicle.value != null &&
+                !_currentRawJson.value.isNullOrBlank()
+
+        val hasProAdvertReport =
+            _advertAnalysis.value != null
+
+        return hasOfficialVehicleReport ||
+            hasProAdvertReport
+    }
+
+    /*
+     * =========================================================
      * SAVE CURRENT REPORT
      * =========================================================
-     *
-     * Uses the existing Hidden History permanent storage pathway.
-     *
-     * This does NOT create another Supabase save implementation.
      */
 
     fun saveCurrentReport() {
@@ -362,13 +578,26 @@ class ProVehicleSearchViewModel : ViewModel() {
         val rawJson =
             _currentRawJson.value
 
+        val currentAdvertAnalysis =
+            _advertAnalysis.value
+
+        val hasOfficialVehicleReport =
+            vehicle != null &&
+                !rawJson.isNullOrBlank()
+
+        val hasProAdvertReport =
+            currentAdvertAnalysis != null
+
         if (
-            vehicle == null ||
-            rawJson.isNullOrBlank()
+            !hasOfficialVehicleReport &&
+            !hasProAdvertReport
         ) {
 
+            _canSaveCurrentReport.value =
+                false
+
             _saveMessage.value =
-                "No official vehicle report is available to save."
+                "No completed report is available to save."
 
             return
         }
@@ -393,58 +622,120 @@ class ProVehicleSearchViewModel : ViewModel() {
 
                 Log.d(
                     "ProVehicleSearch",
-                    "Saving current Pro vehicle report..."
+                    "Saving completed report. " +
+                        "officialVehicle=$hasOfficialVehicleReport " +
+                        "advertOnly=$hasProAdvertReport"
                 )
 
-                val rawAdvertInput =
-                    _rawAdvertInput.value
+                val rawAdvert =
+                    _advertInput.value
+                        .trim()
                         .takeIf {
                             it.isNotBlank()
                         }
 
                 val parsedAdvert =
-                    rawAdvertInput
+                    rawAdvert
                         ?.let {
-                            advertParser.parse(it)
+
+                            try {
+
+                                advertParser.parse(
+                                    it
+                                )
+
+                            } catch (
+                                e: Throwable
+                            ) {
+
+                                Log.w(
+                                    "ProVehicleSearch",
+                                    "Advert parsing during save failed: ${e.message}"
+                                )
+
+                                null
+                            }
                         }
                         ?.takeIf {
                             it.rawText.isNotBlank()
                         }
 
                 val officialCrossCheck =
-                    parsedAdvert
-                        ?.let { advert ->
+                    if (
+                        vehicle != null &&
+                        parsedAdvert != null
+                    ) {
+
+                        try {
+
                             advertOfficialCrossCheckEngine.compare(
-                                advert = advert,
-                                vehicle = vehicle
+                                advert =
+                                    parsedAdvert,
+
+                                vehicle =
+                                    vehicle
                             )
+
+                        } catch (
+                            e: Throwable
+                        ) {
+
+                            Log.w(
+                                "ProVehicleSearch",
+                                "Official advert cross-check failed during save: ${e.message}"
+                            )
+
+                            null
                         }
+
+                    } else {
+
+                        null
+                    }
 
                 savedReports.saveCurrentReport(
 
                     currentRawJson =
-                        rawJson,
+                        if (
+                            hasOfficialVehicleReport
+                        ) {
+                            rawJson
+                        } else {
+                            null
+                        },
 
                     parsedAdvert =
                         parsedAdvert,
 
                     advertAnalysis =
-                        _advertAnalysis.value,
+                        currentAdvertAnalysis,
 
                     officialCrossCheck =
                         officialCrossCheck,
 
                     rawAdvertInput =
-                        rawAdvertInput
+                        rawAdvert
                 )
 
                 Log.d(
                     "ProVehicleSearch",
-                    "Pro vehicle report saved successfully."
+                    "Report saved successfully."
                 )
 
                 _saveMessage.value =
-                    "Report saved successfully."
+                    if (
+                        hasOfficialVehicleReport
+                    ) {
+
+                        "Report saved successfully."
+
+                    } else {
+
+                        "Pro advert report saved successfully."
+                    }
+
+                _canSaveCurrentReport.value =
+                    hasSaveableReport()
 
             } catch (
                 e: Throwable
@@ -452,7 +743,7 @@ class ProVehicleSearchViewModel : ViewModel() {
 
                 Log.e(
                     "ProVehicleSearch",
-                    "Failed to save Pro vehicle report: ${e.message}",
+                    "Failed to save report: ${e.message}",
                     e
                 )
 
@@ -462,6 +753,9 @@ class ProVehicleSearchViewModel : ViewModel() {
                             it.isNotBlank()
                         }
                         ?: "Failed to save report."
+
+                _canSaveCurrentReport.value =
+                    hasSaveableReport()
 
             } finally {
 
@@ -473,37 +767,166 @@ class ProVehicleSearchViewModel : ViewModel() {
 
     /*
      * =========================================================
-     * UNIVERSAL INPUT
+     * RESERVE PRO SEARCH TOKEN
      * =========================================================
-     *
-     * Supported:
-     *
-     * 1. Registration only
-     * 2. Full advert containing registration
-     * 3. Full advert without registration
-     *
-     * IMPORTANT:
-     *
-     * All analysis ultimately goes through AdvertAnalysisRepository.
-     *
-     * The old AutoApp intelligence pipeline is NOT called.
      */
 
-    fun processUniversalInput(
-        input: String
-    ) {
+    private suspend fun reserveProSearchToken(): String {
 
-        val trimmed =
-            input.trim()
+        heldProSearchTokenId?.let {
 
-        if (
-            trimmed.isEmpty()
-        ) {
-            return
+            Log.d(
+                "ProVehicleSearch",
+                "Existing Pro Vehicle Search token already held: $it"
+            )
+
+            return it
         }
 
-        _rawAdvertInput.value =
-            trimmed
+        Log.d(
+            "ProVehicleSearch",
+            "Reserving one Pro Vehicle Search token..."
+        )
+
+        val tokenResult =
+            tokenManager.reserveToken()
+
+        val tokenId =
+            tokenResult.getOrThrow()
+
+        if (
+            tokenId.isBlank()
+        ) {
+
+            throw IllegalStateException(
+                "The Pro Vehicle Search token reservation returned an empty token ID."
+            )
+        }
+
+        heldProSearchTokenId =
+            tokenId
+
+        Log.d(
+            "ProVehicleSearch",
+            "Pro Vehicle Search token reserved: $tokenId"
+        )
+
+        return tokenId
+    }
+
+    /*
+     * =========================================================
+     * CONSUME PRO SEARCH TOKEN
+     * =========================================================
+     */
+
+    private suspend fun consumeProSearchToken() {
+
+        val tokenId =
+            heldProSearchTokenId
+                ?: throw IllegalStateException(
+                    "No Pro Vehicle Search token is currently held."
+                )
+
+        Log.d(
+            "ProVehicleSearch",
+            "Consuming Pro Vehicle Search token: $tokenId"
+        )
+
+        val result =
+            tokenManager.consumeToken(
+                tokenId
+            )
+
+        val consumed =
+            result.getOrThrow()
+
+        if (
+            !consumed
+        ) {
+
+            throw IllegalStateException(
+                "The Pro Vehicle Search token could not be completed."
+            )
+        }
+
+        heldProSearchTokenId =
+            null
+
+        Log.d(
+            "ProVehicleSearch",
+            "Pro Vehicle Search token consumed successfully: $tokenId"
+        )
+    }
+
+    /*
+     * =========================================================
+     * REFUND PRO SEARCH TOKEN
+     * =========================================================
+     */
+
+    private suspend fun refundProSearchToken() {
+
+        val tokenId =
+            heldProSearchTokenId
+                ?: return
+
+        Log.d(
+            "ProVehicleSearch",
+            "Refunding Pro Vehicle Search token: $tokenId"
+        )
+
+        try {
+
+            val result =
+                tokenManager.refundToken(
+                    tokenId
+                )
+
+            val refunded =
+                result.getOrElse {
+                    false
+                }
+
+            if (
+                refunded
+            ) {
+
+                Log.d(
+                    "ProVehicleSearch",
+                    "Pro Vehicle Search token refunded successfully: $tokenId"
+                )
+
+                heldProSearchTokenId =
+                    null
+
+            } else {
+
+                Log.e(
+                    "ProVehicleSearch",
+                    "Pro Vehicle Search token refund was not confirmed: $tokenId"
+                )
+            }
+
+        } catch (
+            e: Throwable
+        ) {
+
+            Log.e(
+                "ProVehicleSearch",
+                "Failed to refund Pro Vehicle Search token: ${e.message}",
+                e
+            )
+        }
+    }
+
+    /*
+     * =========================================================
+     * START REGISTRATION SEARCH
+     * =========================================================
+     */
+
+    fun processRegistrationSearch() {
 
         if (
             _isLoading.value
@@ -511,74 +934,203 @@ class ProVehicleSearchViewModel : ViewModel() {
             return
         }
 
-        viewModelScope.launch(
-            Dispatchers.IO
+        if (
+            _selectedSearchType.value !=
+                ProSearchType.REGISTRATION
         ) {
+            return
+        }
+
+        val cleanPlate =
+            normaliseRegistration(
+                _registrationInput.value
+            )
+
+        if (
+            !isValidRegistration(
+                cleanPlate
+            )
+        ) {
+
+            _uiState.value =
+                listOf(
+                    "Please enter a valid UK registration."
+                )
+
+            return
+        }
+
+        runSelectedProSearch {
+
+            processRegistrationInputInternal(
+                cleanPlate
+            )
+        }
+    }
+
+    /*
+     * =========================================================
+     * START ADVERT SEARCH
+     * =========================================================
+     */
+
+    fun processAdvertSearch() {
+
+        if (
+            _isLoading.value
+        ) {
+            return
+        }
+
+        if (
+            _selectedSearchType.value !=
+                ProSearchType.ADVERT
+        ) {
+            return
+        }
+
+        val advert =
+            _advertInput.value
+                .trim()
+
+        if (
+            advert.isBlank()
+        ) {
+
+            _uiState.value =
+                listOf(
+                    "Please paste a vehicle advert."
+                )
+
+            return
+        }
+
+        runSelectedProSearch {
+
+            processAdvertOnlyInputInternal(
+                advert
+            )
+        }
+    }
+
+    /*
+     * =========================================================
+     * START REGISTRATION + ADVERT SEARCH
+     * =========================================================
+     */
+
+    fun processRegistrationAndAdvertSearch() {
+
+        if (
+            _isLoading.value
+        ) {
+            return
+        }
+
+        if (
+            _selectedSearchType.value !=
+                ProSearchType.REGISTRATION_AND_ADVERT
+        ) {
+            return
+        }
+
+        val cleanPlate =
+            normaliseRegistration(
+                _registrationInput.value
+            )
+
+        val advert =
+            _advertInput.value
+                .trim()
+
+        if (
+            !isValidRegistration(
+                cleanPlate
+            )
+        ) {
+
+            _uiState.value =
+                listOf(
+                    "Please enter a valid UK registration."
+                )
+
+            return
+        }
+
+        if (
+            advert.isBlank()
+        ) {
+
+            _uiState.value =
+                listOf(
+                    "Please paste a vehicle advert."
+                )
+
+            return
+        }
+
+        runSelectedProSearch {
+
+            processRegistrationAndAdvertInputInternal(
+                cleanPlate,
+                advert
+            )
+        }
+    }
+
+    /*
+     * =========================================================
+     * COMMON SELECTED PRO SEARCH EXECUTOR
+     * =========================================================
+     */
+
+    private fun runSelectedProSearch(
+        pipeline: suspend () -> Unit
+    ) {
+
+        viewModelScope.launch(Dispatchers.IO) {
+
+            val currentSession =
+                SupabaseManager.client.auth.currentSessionOrNull()
+
+            if (currentSession == null) {
+
+                Log.d(
+                    "ProVehicleSearch",
+                    "Pro Search blocked: no authenticated user session."
+                )
+
+                _uiState.value =
+                    listOf(
+                        "Please log in to use Pro Search."
+                    )
+
+                _canSaveCurrentReport.value =
+                    false
+
+                return@launch
+            }
 
             _isLoading.value =
                 true
 
             try {
 
-                                val compactInput =
-                    trimmed.replace(
-                        Regex("\\s+"),
-                        ""
-                    ).uppercase()
+                clearResultsForNewSearch()
 
-                // Strict UK registration pattern check for standalone input
-                val strictUkPlateRegex = Regex("^[A-Z]{1,3}[0-9]{1,4}[A-Z]{0,3}$|^[0-9]{1,4}[A-Z]{1,3}$|^[A-Z]{1,3}[0-9]{1,4}$")
-                val isStandaloneRegistration =
-                    compactInput.length in 2..8 &&
-                    strictUkPlateRegex.matches(compactInput)
+                reserveProSearchToken()
 
+                pipeline()
 
-                /*
-                 * -------------------------------------------------
-                 * RESET PREVIOUS SEARCH STATE
-                 * -------------------------------------------------
-                 */
+                consumeProSearchToken()
 
-                _advertAnalysis.value =
-                    null
+                Log.d(
+                    "ProVehicleSearch",
+                    "Pro Search completed successfully and token consumption was confirmed."
+                )
 
-                _currentAnalysisResult.value =
-                    null
-
-                _result.value =
-                    null
-
-                /*
-                 * -------------------------------------------------
-                 * REGISTRATION ONLY
-                 * -------------------------------------------------
-                 *
-                 * First obtain the official vehicle data.
-                 *
-                 * Then send that official data through the SAME
-                 * analyse-advert pathway used by AdvertAnalysisVM.
-                 */
-
-                if (
-                    isStandaloneRegistration
-                ) {
-
-                    processRegistrationInputInternal(
-                        compactInput.uppercase()
-                    )
-
-                } else {
-
-                    /*
-                     * -------------------------------------------------
-                     * FULL ADVERT
-                     * -------------------------------------------------
-                     */
-
-                    processAdvertInputInternal(
-                        trimmed
-                    )
-                }
+                _canSaveCurrentReport.value =
+                    hasSaveableReport()
 
             } catch (
                 e: Throwable
@@ -586,17 +1138,42 @@ class ProVehicleSearchViewModel : ViewModel() {
 
                 Log.e(
                     "ProVehicleSearch",
-                    "Universal input processing failed: ${e.message}",
+                    "Selected Pro Search failed: ${e.message}",
                     e
                 )
 
-                _uiState.value =
-                    listOf(
+                refundProSearchToken()
+
+                val errorMessage =
+                    if (
+                        e.message?.contains(
+                            "No vehicle report token is available"
+                        ) == true
+                    ) {
+
+                        "No Pro Vehicle Search tokens are available."
+
+                    } else if (
+                        e.message?.contains("403") == true ||
+                        e.message?.contains("PRO_REQUIRED") == true ||
+                        e.message?.contains("Pro access required") == true
+                    ) {
+
+                        "Access denied."
+
+                    } else {
+
                         "Pro Search Error: ${
                             e.localizedMessage
                                 ?: "Failed to process input"
                         }"
-                    )
+                    }
+
+                _uiState.value =
+                    listOf(errorMessage)
+
+                _canSaveCurrentReport.value =
+                    false
 
             } finally {
 
@@ -608,41 +1185,8 @@ class ProVehicleSearchViewModel : ViewModel() {
 
     /*
      * =========================================================
-     * COMPATIBILITY SEARCH METHOD
+     * REGISTRATION-ONLY PIPELINE
      * =========================================================
-     */
-
-    fun search(
-        registration: String
-    ) {
-
-        processUniversalInput(
-            registration
-        )
-    }
-
-    /*
-     * =========================================================
-     * REGISTRATION-ONLY PRO SEARCH
-     * =========================================================
-     *
-     * FLOW:
-     *
-     * REGISTRATION
-     *      ↓
-     * VehicleSearchOfficialLookup
-     *      ↓
-     * DVLA + DVSA/MOT
-     *
-     * There is deliberately NO:
-     *
-     * AdvertAnalysisRepository
-     * analyse-advert
-     * VehicleKnowledgeCoordinator
-     * KnowledgeRequestBuilder
-     * VehicleSearchReportBuilder
-     * legacy intelligence coordinator
-     * legacy intelligence result generation
      */
 
     private suspend fun processRegistrationInputInternal(
@@ -654,29 +1198,12 @@ class ProVehicleSearchViewModel : ViewModel() {
             "Starting Pro registration search: $cleanPlate"
         )
 
-        /*
-         * ---------------------------------------------------------
-         * OFFICIAL LOOKUP ONLY (Smooth Handler)
-         * ---------------------------------------------------------
-         */
-
         retrieveOfficialVehicleData(
             cleanPlate
         )
 
-        /*
-         * ---------------------------------------------------------
-         * CLEAR ADVERT ANALYSIS FOR REGISTRATION-ONLY SEARCHES
-         * ---------------------------------------------------------
-         */
-
-        _advertAnalysis.value = null
-
-        /*
-         * ---------------------------------------------------------
-         * UPDATE RESULT
-         * ---------------------------------------------------------
-         */
+        _advertAnalysis.value =
+            null
 
         _result.value =
             ProVehicleSearchResult(
@@ -693,7 +1220,9 @@ class ProVehicleSearchViewModel : ViewModel() {
                                 ?: cleanPlate
                         }",
 
-                        "DVLA + DVSA/MOT"
+                        "DVLA + DVSA/MOT",
+
+                        "Vehicle analysis"
                     )
             )
 
@@ -705,108 +1234,69 @@ class ProVehicleSearchViewModel : ViewModel() {
 
     /*
      * =========================================================
-     * ADVERT PROCESSING
+     * ADVERT-ONLY PIPELINE
      * =========================================================
-     *
-     * FLOW:
-     *
-     * ADVERT
-     *      ↓
-     * EXTRACT REGISTRATION
-     *      ↓
-     * OFFICIAL DVLA/DVSA LOOKUP
-     *      ↓
-     * AdvertAnalysisRepository
-     *      ↓
-     * analyse-advert
-     *      ↓
-     * AdvertAnalysis
-     *
-     * If no registration exists, the advert is still sent through
-     * Advert Analysis without official vehicle data.
      */
 
-    private suspend fun processAdvertInputInternal(
+    private suspend fun processAdvertOnlyInputInternal(
         text: String
     ) {
 
-        val detectedRegistration =
-            extractRegistration(
-                text
-            )
-
         Log.d(
             "ProVehicleSearch",
-            "Advert registration detected: ${
-                detectedRegistration
-                    ?: "NONE"
-            }"
+            "Starting Pro advert-only pipeline."
         )
 
-        /*
-         * ---------------------------------------------------------
-         * OFFICIAL DATA
-         * ---------------------------------------------------------
-         */
+        val parsedAdvert =
+            try {
 
-        val officialVehicleData =
-            if (
-                detectedRegistration != null
-            ) {
-
-                retrieveOfficialVehicleData(
-                    detectedRegistration
+                advertParser.parse(
+                    text
                 )
 
-            } else {
+            } catch (
+                e: Throwable
+            ) {
 
-                _currentVehicle.value =
-                    null
-
-                _currentRawJson.value =
-                    null
+                Log.e(
+                    "ProVehicleSearch",
+                    "Advert parsing failed: ${e.message}",
+                    e
+                )
 
                 null
             }
 
-        /*
-         * ---------------------------------------------------------
-         * ADVERT ANALYSIS
-         * ---------------------------------------------------------
-         *
-         * This is the SAME repository and SAME Edge Function used
-         * by AdvertAnalysisViewModel.
-         */
-
         val analysis =
-            advertAnalysisRepository
-                .analyzeAdvert(
+            advertAnalysisRepository.analyzeAdvert(
 
-                    advertText =
-                        text,
+                advertText =
+                    text,
 
-                    registration =
-                        detectedRegistration,
+                registration =
+                    null,
 
-                    officialVehicleData =
-                        officialVehicleData
-                )
+                officialVehicleData =
+                    null,
 
-        /*
-         * ---------------------------------------------------------
-         * STORE ANALYSIS
-         * ---------------------------------------------------------
-
-         */
+                deterministicAdvertAnalysis =
+                    parsedAdvert
+            )
 
         _advertAnalysis.value =
             analysis
 
-        /*
-         * ---------------------------------------------------------
-         * RESULT SUMMARY
-         * ---------------------------------------------------------
-         */
+        _currentVehicle.value =
+            null
+
+        _currentRawJson.value =
+            null
+
+        _currentAnalysisResult.value =
+            null
+
+        _uiState.value =
+            emptyList()
 
         _result.value =
             ProVehicleSearchResult(
@@ -817,71 +1307,134 @@ class ProVehicleSearchViewModel : ViewModel() {
                 displayItems =
                     buildList {
 
-                        detectedRegistration?.let {
-                            add(
-                                "Registration: $it"
-                            )
-                        }
-
-                        if (
-                            officialVehicleData != null
-                        ) {
-                            add(
-                                "DVLA + DVSA/MOT"
-                            )
-                        }
-
                         add(
-                            "Advert Analysis"
+                            "Deterministic advert analysis"
                         )
 
                         add(
-                            "Pro vehicle analysis"
+                            "Gemini Pro analysis"
+                        )
+
+                        add(
+                            "Pro advert report available to save"
                         )
                     }
             )
 
-        /*
-         * ---------------------------------------------------------
-         * NO REGISTRATION
-         * ---------------------------------------------------------
-         *
-         * Advert analysis is still valid.
-         *
-         * There simply isn't an official vehicle payload to show.
-         */
-
-        if (
-            detectedRegistration == null
-        ) {
-
-            _currentVehicle.value =
-                null
-
-            _currentRawJson.value =
-                null
-
-            _currentAnalysisResult.value =
-                null
-
-            _uiState.value =
-                emptyList()
-        }
+        _canSaveCurrentReport.value =
+            hasSaveableReport()
 
         Log.d(
             "ProVehicleSearch",
-            "Pro advert analysis completed."
+            "Pro advert-only pipeline completed. " +
+                "saveable=${_canSaveCurrentReport.value}"
         )
     }
 
     /*
      * =========================================================
-     * OFFICIAL VEHICLE LOOKUP ONLY
+     * REGISTRATION + ADVERT PIPELINE
      * =========================================================
-     *
-     * This method retrieves the official DVLA + DVSA/MOT payload.
-     *
-     * It does NOT perform any intelligence or analysis.
+     */
+
+    private suspend fun processRegistrationAndAdvertInputInternal(
+        cleanPlate: String,
+        text: String
+    ) {
+
+        Log.d(
+            "ProVehicleSearch",
+            "Starting Pro registration + advert pipeline."
+        )
+
+        val parsedAdvert =
+            try {
+
+                advertParser.parse(
+                    text
+                )
+
+            } catch (
+                e: Throwable
+            ) {
+
+                Log.e(
+                    "ProVehicleSearch",
+                    "Advert parsing failed: ${e.message}",
+                    e
+                )
+
+                null
+            }
+
+        val officialVehicleData =
+            retrieveOfficialVehicleData(
+                cleanPlate
+            )
+
+        val analysis =
+            advertAnalysisRepository.analyzeAdvert(
+
+                advertText =
+                    text,
+
+                registration =
+                    cleanPlate,
+
+                officialVehicleData =
+                    officialVehicleData,
+
+                deterministicAdvertAnalysis =
+                    parsedAdvert
+            )
+
+        _advertAnalysis.value =
+            analysis
+
+        _result.value =
+            ProVehicleSearchResult(
+
+                summary =
+                    "Pro registration + advert search completed.",
+
+                displayItems =
+                    buildList {
+
+                        add(
+                            "Registration: $cleanPlate"
+                        )
+
+                        add(
+                            "DVLA + DVSA/MOT"
+                        )
+
+                        add(
+                            "Vehicle analysis"
+                        )
+
+                        add(
+                            "Deterministic advert analysis"
+                        )
+
+                        add(
+                            "Gemini Pro analysis"
+                        )
+                    }
+            )
+
+        _canSaveCurrentReport.value =
+            hasSaveableReport()
+
+        Log.d(
+            "ProVehicleSearch",
+            "Pro registration + advert pipeline completed."
+        )
+    }
+
+    /*
+     * =========================================================
+     * OFFICIAL VEHICLE LOOKUP
+     * =========================================================
      */
 
     private suspend fun retrieveOfficialVehicleData(
@@ -890,7 +1443,7 @@ class ProVehicleSearchViewModel : ViewModel() {
 
         Log.d(
             "ProVehicleSearch",
-            "Starting official lookup: $cleanPlate"
+            "Starting official vehicle lookup: $cleanPlate"
         )
 
         val responseData =
@@ -898,42 +1451,18 @@ class ProVehicleSearchViewModel : ViewModel() {
                 cleanPlate
             )
 
-        /*
-         * ---------------------------------------------------------
-         * STORE RAW RESPONSE
-         * ---------------------------------------------------------
-         */
-
         _currentRawJson.value =
             responseData
-
-        /*
-         * ---------------------------------------------------------
-         * PARSE VEHICLE
-         * ---------------------------------------------------------
-         */
 
         try {
 
             val vehicle =
-                jsonParser
-                    .decodeFromString<Vehicle>(
-                        responseData
-                    )
+                jsonParser.decodeFromString<Vehicle>(
+                    responseData
+                )
 
             _currentVehicle.value =
                 vehicle
-
-            /*
-             * ---------------------------------------------------------
-             * BUILD OFFICIAL VEHICLE UI DATA
-             * ---------------------------------------------------------
-             *
-             * This replaces the old VehicleSearchReportBuilder
-             * purely for presentation.
-             *
-             * No intelligence is generated here.
-             */
 
             _uiState.value =
                 mapVehicleToUiState(
@@ -957,11 +1486,16 @@ class ProVehicleSearchViewModel : ViewModel() {
                 listOf(
                     "Official vehicle data was retrieved but could not be displayed."
                 )
+
+            throw IllegalStateException(
+                "Official vehicle data was retrieved but could not be processed.",
+                e
+            )
         }
 
         Log.d(
             "ProVehicleSearch",
-            "Official lookup completed: $cleanPlate"
+            "Official vehicle lookup completed: $cleanPlate"
         )
 
         return responseData
@@ -969,15 +1503,8 @@ class ProVehicleSearchViewModel : ViewModel() {
 
     /*
      * =========================================================
-     * OFFICIAL VEHICLE → EXISTING UI STATE
+     * OFFICIAL VEHICLE → UI
      * =========================================================
-     *
-     * This creates the List<Any> structure expected by the existing
-     * ProVehicleSearchScreen / VehicleSearchSectionParser.
-     *
-     * It contains ONLY official vehicle information.
-     *
-     * It does NOT calculate intelligence.
      */
 
     private fun mapVehicleToUiState(
@@ -986,12 +1513,6 @@ class ProVehicleSearchViewModel : ViewModel() {
 
         val list =
             mutableListOf<Any>()
-
-        /*
-         * ---------------------------------------------------------
-         * VEHICLE IDENTITY
-         * ---------------------------------------------------------
-         */
 
         list.add(
             "Vehicle Identity"
@@ -1073,12 +1594,6 @@ class ProVehicleSearchViewModel : ViewModel() {
             )
         }
 
-        /*
-         * ---------------------------------------------------------
-         * TECHNICAL SPECIFICATIONS
-         * ---------------------------------------------------------
-         */
-
         list.add(
             "Technical Specifications"
         )
@@ -1129,12 +1644,6 @@ class ProVehicleSearchViewModel : ViewModel() {
             )
         }
 
-        /*
-         * ---------------------------------------------------------
-         * REGISTRATION / DATES
-         * ---------------------------------------------------------
-         */
-
         list.add(
             "Registration Information"
         )
@@ -1174,12 +1683,6 @@ class ProVehicleSearchViewModel : ViewModel() {
             )
         }
 
-        /*
-         * ---------------------------------------------------------
-         * TAX / MOT
-         * ---------------------------------------------------------
-         */
-
         list.add(
             "Tax & MOT"
         )
@@ -1211,12 +1714,6 @@ class ProVehicleSearchViewModel : ViewModel() {
                 "MOT Expiry Date" to it
             )
         }
-
-        /*
-         * ---------------------------------------------------------
-         * OWNERSHIP / VEHICLE FLAGS
-         * ---------------------------------------------------------
-         */
 
         list.add(
             "Vehicle History"
@@ -1262,16 +1759,10 @@ class ProVehicleSearchViewModel : ViewModel() {
         vehicle.markedForExport?.let {
 
             list.add(
-                "Marked For Export" to
+                "Marked for Export" to
                     it.toString()
             )
         }
-
-        /*
-         * ---------------------------------------------------------
-         * MOT HISTORY
-         * ---------------------------------------------------------
-         */
 
         if (
             vehicle.motTests.isNotEmpty()
@@ -1285,12 +1776,6 @@ class ProVehicleSearchViewModel : ViewModel() {
                 list.add(it)
             }
         }
-
-        /*
-         * ---------------------------------------------------------
-         * ACTIVE SYMPTOMS
-         * ---------------------------------------------------------
-         */
 
         if (
             vehicle.activeSymptoms.isNotEmpty()
@@ -1320,6 +1805,18 @@ class ProVehicleSearchViewModel : ViewModel() {
             !_isLoading.value
         ) {
 
+            _selectedSearchType.value =
+                null
+
+            _registrationInput.value =
+                ""
+
+            _advertInput.value =
+                ""
+
+            _rawAdvertInput.value =
+                ""
+
             _result.value =
                 null
 
@@ -1338,9 +1835,6 @@ class ProVehicleSearchViewModel : ViewModel() {
             _advertAnalysis.value =
                 null
 
-            _rawAdvertInput.value =
-                ""
-
             _selectedMotTest.value =
                 null
 
@@ -1349,6 +1843,45 @@ class ProVehicleSearchViewModel : ViewModel() {
 
             _isSaving.value =
                 false
+
+            _canSaveCurrentReport.value =
+                false
         }
+    }
+
+    /*
+     * =========================================================
+     * LEGACY SEARCH COMPATIBILITY
+     * =========================================================
+     */
+
+    fun search(
+        registration: String
+    ) {
+
+        if (
+            _isLoading.value
+        ) {
+            return
+        }
+
+        _selectedSearchType.value =
+            ProSearchType.REGISTRATION
+
+        _registrationInput.value =
+            registration
+
+        processRegistrationSearch()
+    }
+
+    /*
+     * =========================================================
+     * VIEWMODEL CLEANUP
+     * =========================================================
+     */
+
+    override fun onCleared() {
+
+        super.onCleared()
     }
 }

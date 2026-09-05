@@ -1,6 +1,5 @@
 package com.hiddenhistory.engine.advert.crosscheck
 
-import com.hiddenhistory.engine.ParsedVehicleAdvert
 import com.hiddenhistory.models.MotTest
 import kotlin.math.roundToInt
 
@@ -64,6 +63,25 @@ internal fun buildOfficialMileageReading(
     )
 }
 
+/**
+ * Extracts a mileage value from an advert-specific mileage field.
+ *
+ * IMPORTANT:
+ *
+ * This function does NOT invent mileage when the advert does not
+ * provide one.
+ *
+ * The upstream AdvertBasicExtractor is responsible for extracting
+ * the advert mileage from the seller's advert text. This function
+ * only interprets a value that has already been identified as
+ * mileage by that extraction layer.
+ *
+ * Therefore:
+ *
+ * null = no usable advert mileage was supplied.
+ *
+ * A missing advert mileage is NOT itself a risk finding.
+ */
 internal fun extractAdvertMileage(
     value: Any?
 ): AdvertMileage? {
@@ -73,7 +91,12 @@ internal fun extractAdvertMileage(
             ?: return null
 
     /*
-     * Accept common advert forms:
+     * At this stage we only accept values which contain an explicit
+     * mileage unit or a recognised compact "k" mileage form.
+     *
+     * Bare arbitrary numbers are deliberately not treated as mileage.
+     *
+     * Examples accepted:
      *
      * 113,000 miles
      * 113000 miles
@@ -82,102 +105,173 @@ internal fun extractAdvertMileage(
      * 181,000 km
      * 181000 km
      *
-     * Do not accept arbitrary bare numbers here.
-     * A bare number is only accepted when the surrounding
-     * advert field is already known to represent mileage.
+     * The upstream advert extractor is responsible for preventing
+     * unrelated figures such as performance figures from reaching
+     * this cross-check as mileage.
      */
-
-    // Filter out numbers preceded by maintenance/service keywords (e.g., timing belt done at 72k)
-    val serviceContextPattern = Regex(
-        """\b(?:timing\s+belt|cam\s+belt|cambelt|head\s+gasket|service|serviced|changed|done)\b.{0,25}""",
-        RegexOption.IGNORE_CASE
-    )
-
     val regex =
         Regex(
-            """\b(\d{1,3}(?:,\d{3})*|\d+(?:\.\d+)?)\s*(k|miles?|mls|km|kms|kilometres?|kilometers?)?\b""",
+            """\b(\d{1,3}(?:,\d{3})*|\d+(?:\.\d+)?)\s*(k|miles?|mls|km|kms|kilometres?|kilometers?)\b""",
             RegexOption.IGNORE_CASE
         )
 
-    val match = regex.findAll(text).firstOrNull { foundMatch ->
-        val startIndex = foundMatch.range.first
-        val precedingText = text.substring(maxOf(0, startIndex - 30), startIndex)
-        !serviceContextPattern.containsMatchIn(precedingText)
-    } ?: return null
+    val matches =
+        regex
+            .findAll(text)
+            .toList()
 
-    val rawNumber =
-        match.groupValues
-            .getOrNull(1)
-            ?.replace(",", "")
-            ?.trim()
-            ?: return null
-
-    val number =
-        rawNumber
-            .toDoubleOrNull()
-            ?: return null
-
-    if (number <= 0.0) {
+    if (matches.isEmpty()) {
         return null
     }
 
-    val rawUnit =
-        match.groupValues
-            .getOrNull(2)
-            ?.trim()
-            ?.lowercase()
-            .orEmpty()
+    /*
+     * Evaluate all candidates rather than blindly accepting the first
+     * numerical match.
+     *
+     * This protects the cross-check layer from historical mileage
+     * figures associated with servicing or component replacement.
+     */
+    val serviceContextPattern =
+        Regex(
+            """\b(?:timing\s+belt|cam\s+belt|cambelt|head\s+gasket|service(?:d|ing)?|servicing|changed|replaced|replacement|done|fitted|repair|repaired|maintenance|mot)\b""",
+            RegexOption.IGNORE_CASE
+        )
 
-    val unit =
-        when {
+    val validCandidate =
+        matches
+            .asSequence()
+            .mapNotNull { match ->
 
-            rawUnit == "k" ->
-                MileageUnit.MILES
+                val startIndex =
+                    match.range.first
 
-            rawUnit == "mile" ||
-                    rawUnit == "miles" ||
-                    rawUnit == "mls" ->
-                MileageUnit.MILES
+                val endIndex =
+                    match.range.last + 1
 
-            rawUnit == "km" ||
-                    rawUnit == "kms" ||
-                    rawUnit == "kilometre" ||
-                    rawUnit == "kilometres" ||
-                    rawUnit == "kilometer" ||
-                    rawUnit == "kilometers" ->
-                MileageUnit.KILOMETRES
+                /*
+                 * Inspect context on both sides of the mileage figure.
+                 *
+                 * This catches both:
+                 *
+                 * "timing belt replaced at 72,000 miles"
+                 *
+                 * and:
+                 *
+                 * "72,000 miles when the timing belt was replaced"
+                 */
+                val contextStart =
+                    (startIndex - 50)
+                        .coerceAtLeast(0)
 
-            else ->
-                MileageUnit.MILES
-        }
+                val contextEnd =
+                    (endIndex + 50)
+                        .coerceAtMost(text.length)
 
-    val originalMileage =
-        when {
-            rawUnit == "k" ->
-                (number * 1000.0).roundToInt()
+                val context =
+                    text.substring(
+                        contextStart,
+                        contextEnd
+                    )
 
-            else ->
-                number.roundToInt()
-        }
+                /*
+                 * A mileage figure associated with service/repair
+                 * history is historical evidence rather than the
+                 * advert's current odometer reading.
+                 */
+                if (
+                    serviceContextPattern
+                        .containsMatchIn(context)
+                ) {
+                    return@mapNotNull null
+                }
 
-    val miles =
-        when (unit) {
+                val rawNumber =
+                    match.groupValues
+                        .getOrNull(1)
+                        ?.replace(",", "")
+                        ?.trim()
+                        ?: return@mapNotNull null
 
-            MileageUnit.MILES ->
-                originalMileage
+                val number =
+                    rawNumber
+                        .toDoubleOrNull()
+                        ?: return@mapNotNull null
 
-            MileageUnit.KILOMETRES ->
-                kilometresToMiles(originalMileage)
+                if (number <= 0.0) {
+                    return@mapNotNull null
+                }
 
-            MileageUnit.UNKNOWN ->
-                return null
-        }
+                val rawUnit =
+                    match.groupValues
+                        .getOrNull(2)
+                        ?.trim()
+                        ?.lowercase()
+                        .orEmpty()
 
-    return AdvertMileage(
-        originalMileage = originalMileage,
-        originalUnit = unit,
-        miles = miles
-    )
+                val unit =
+                    when {
+
+                        rawUnit == "k" ->
+                            MileageUnit.MILES
+
+                        rawUnit == "mile" ||
+                                rawUnit == "miles" ||
+                                rawUnit == "mls" ->
+                            MileageUnit.MILES
+
+                        rawUnit == "km" ||
+                                rawUnit == "kms" ||
+                                rawUnit == "kilometre" ||
+                                rawUnit == "kilometres" ||
+                                rawUnit == "kilometer" ||
+                                rawUnit == "kilometers" ->
+                            MileageUnit.KILOMETRES
+
+                        else ->
+                            MileageUnit.UNKNOWN
+                    }
+
+                if (unit == MileageUnit.UNKNOWN) {
+                    return@mapNotNull null
+                }
+
+                val originalMileage =
+                    when {
+
+                        rawUnit == "k" ->
+                            (number * 1000.0)
+                                .roundToInt()
+
+                        else ->
+                            number.roundToInt()
+                    }
+
+                if (originalMileage <= 0) {
+                    return@mapNotNull null
+                }
+
+                val miles =
+                    when (unit) {
+
+                        MileageUnit.MILES ->
+                            originalMileage
+
+                        MileageUnit.KILOMETRES ->
+                            kilometresToMiles(originalMileage)
+
+                        MileageUnit.UNKNOWN ->
+                            return@mapNotNull null
+                    }
+
+                AdvertMileage(
+                    originalMileage = originalMileage,
+                    originalUnit = unit,
+                    miles = miles
+                )
+            }
+            .firstOrNull()
+
+    return validCandidate
 }
 
 internal fun extractMileage(
@@ -194,12 +288,15 @@ internal fun extractMileage(
      *
      * We deliberately extract the numeric component only here.
      * Unit interpretation is handled separately.
+     *
+     * This function is for an already identified MOT odometer
+     * field, not arbitrary advert text.
      */
-
     val match =
         Regex(
             """\b\d{1,3}(?:,\d{3})*(?:\.\d+)?\b|\b\d+(?:\.\d+)?\b"""
-        ).find(text)
+        )
+            .find(text)
             ?: return null
 
     val numericValue =
@@ -343,7 +440,6 @@ internal fun findSameDayFailToPassRetests(
      * We therefore expose the event as evidence for the wider
      * analysis layer rather than assigning a risk judgement here.
      */
-
     val sameDayTests =
         motTests
             .filter {

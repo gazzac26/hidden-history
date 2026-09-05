@@ -6,8 +6,6 @@ import com.hiddenhistory.models.Vehicle
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
-import java.time.ZoneOffset
-import java.time.Instant
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.Locale
@@ -43,10 +41,7 @@ import kotlin.math.roundToInt
  * Missing, blank, unknown or unavailable official data is NEVER
  * interpreted as negative evidence.
  *
- * Official history which merely contains an old defect is NOT
- * automatically treated as a contradiction of the seller's advert.
- *
- * A contradiction requires an actual, comparable seller claim.
+ * A missing field therefore cannot create a contradiction.
  */
 class AdvertOfficialCrossCheckEngine {
 
@@ -99,29 +94,11 @@ class AdvertOfficialCrossCheckEngine {
         val dateTime: LocalDateTime?
     )
 
-    private data class DefectEvidence(
-        val test: MotTest,
-        val text: String,
-        val type: String?,
-        val dangerous: Boolean
-    )
-
-    /*
-     * A defect is only counted once per MOT test when looking for
-     * repeated patterns. This prevents one MOT record containing
-     * multiple similar lines from artificially inflating the evidence.
-     */
-    private data class DefectFamilyEvidence(
-        val family: String,
-        val testDate: String?,
-        val testNumber: String?
-    )
-
     /**
      * Preferred entry point.
      *
      * Uses the existing Vehicle model supplied by the DVSA/DVLA
-     * pipeline.
+     * pipeline. Vehicle.motTests remains the source of MOT evidence.
      */
     fun compare(
         advert: ParsedVehicleAdvert,
@@ -152,9 +129,10 @@ class AdvertOfficialCrossCheckEngine {
          */
 
         /*
-         * Registration.
+         * Vehicle identity.
          */
         crossCheckTextClaim(
+            label = "registration",
             advertValue = advertValue(
                 advert,
                 "registration",
@@ -175,7 +153,8 @@ class AdvertOfficialCrossCheckEngine {
         /*
          * Make.
          */
-        crossCheckMake(
+        crossCheckTextClaim(
+            label = "make",
             advertValue = advertValue(
                 advert,
                 "make",
@@ -183,6 +162,7 @@ class AdvertOfficialCrossCheckEngine {
                 "vehicleMake"
             ),
             officialValue = vehicle.make,
+            displayName = "make",
             warnings = warnings,
             confirmations = confirmations,
             verificationItems = verificationItems
@@ -190,17 +170,16 @@ class AdvertOfficialCrossCheckEngine {
 
         /*
          * Model.
-         *
-         * Model comparison deliberately allows advert trim/variant
-         * wording around the official base model.
          */
-        crossCheckModel(
+        crossCheckTextClaim(
+            label = "model",
             advertValue = advertValue(
                 advert,
                 "model",
                 "vehicleModel"
             ),
             officialValue = vehicle.model,
+            displayName = "model",
             warnings = warnings,
             confirmations = confirmations,
             verificationItems = verificationItems
@@ -208,6 +187,9 @@ class AdvertOfficialCrossCheckEngine {
 
         /*
          * Fuel type.
+         *
+         * Missing/unknown official fuel type does NOT mean the advert
+         * is wrong.
          */
         crossCheckFuelType(
             advertValue = advertValue(
@@ -224,6 +206,9 @@ class AdvertOfficialCrossCheckEngine {
 
         /*
          * Engine capacity.
+         *
+         * We deliberately support natural advert wording such as
+         * "2.0L" against official 1997cc.
          */
         crossCheckEngineCapacity(
             advertValue = advertValue(
@@ -235,9 +220,7 @@ class AdvertOfficialCrossCheckEngine {
                 "engineCc"
             ),
             officialCc = vehicle.engineCapacity
-                ?: parseEngineSizeToCc(
-                    vehicle.engineSize
-                ),
+                ?: parseEngineSizeToCc(vehicle.engineSize),
             warnings = warnings,
             confirmations = confirmations,
             verificationItems = verificationItems
@@ -328,7 +311,10 @@ class AdvertOfficialCrossCheckEngine {
         )
 
         /*
-         * Ownership.
+         * Ownership / keeper claim.
+         *
+         * This intentionally only compares when the advert parser
+         * actually supplied an owner/keeper claim.
          */
         crossCheckOwnerClaim(
             advertValue = advertValue(
@@ -349,7 +335,7 @@ class AdvertOfficialCrossCheckEngine {
         )
 
         /*
-         * Salvage/write-off.
+         * Salvage / written-off status.
          */
         crossCheckSalvageClaim(
             advertText = advertText(advert),
@@ -360,22 +346,21 @@ class AdvertOfficialCrossCheckEngine {
         )
 
         /*
-         * Export.
+         * Export marker.
          */
         if (vehicle.markedForExport == true) {
-
             warnings.add(
                 "Official vehicle data indicates that the vehicle is " +
-                    "marked for export."
+                    "marked for export. This conflicts with treating the " +
+                    "vehicle as an ordinary UK-market vehicle without " +
+                    "further verification."
             )
 
             verificationItems.add(
                 "Verify the vehicle's current registration/export status " +
                     "and documentation before purchase."
             )
-
         } else if (vehicle.markedForExport == false) {
-
             confirmations.add(
                 "Official vehicle data does not currently indicate that " +
                     "the vehicle is marked for export."
@@ -384,9 +369,12 @@ class AdvertOfficialCrossCheckEngine {
 
         /*
          * Outstanding recall.
+         *
+         * This is not a seller contradiction unless the advert makes
+         * a directly incompatible claim. We surface the official
+         * safety information as a verification warning.
          */
         if (hasPositiveMarker(vehicle.hasOutstandingRecall)) {
-
             warnings.add(
                 "Official vehicle data indicates an outstanding safety " +
                     "recall marker."
@@ -400,7 +388,7 @@ class AdvertOfficialCrossCheckEngine {
         }
 
         /*
-         * Tax.
+         * Tax status.
          */
         crossCheckTaxStatus(
             advertValue = advertValue(
@@ -416,6 +404,8 @@ class AdvertOfficialCrossCheckEngine {
 
         /*
          * VIN.
+         *
+         * VIN is compared only if the advert actually exposes one.
          */
         crossCheckVin(
             advertValue = advertValue(
@@ -431,74 +421,65 @@ class AdvertOfficialCrossCheckEngine {
 
         /*
          * =========================================================
-         * CLAIMS REQUIRING EXTERNAL EVIDENCE
+         * ADVERT CLAIMS THAT REQUIRE EXTERNAL EVIDENCE
          * =========================================================
+         *
+         * These must never be inferred from absence of data.
          */
 
-        val text =
-            advertText(advert)
-
-        if (
-            containsAny(
-                text,
+        if (containsAny(
+                advertText(advert),
                 "full service history",
                 "full service history available",
-                "full service history present",
-                "full service history included"
+                "full service history present"
             )
         ) {
-
             verificationItems.add(
                 "The advert claims full service history. MOT/DVLA data " +
-                    "does not prove a complete service history. Request " +
-                    "the service book or digital service record and " +
-                    "supporting invoices, checking dates and mileage."
+                    "does not by itself prove a complete service history. " +
+                    "Request the service book or digital service record " +
+                    "and supporting invoices, checking dates and mileage."
             )
         }
 
-        if (
-            containsAny(
-                text,
+        if (containsAny(
+                advertText(advert),
                 "hpi clear",
-                "hpi checked",
-                "hpi check"
+                "hpi check clear",
+                "hpi checked and clear"
             )
         ) {
-
             verificationItems.add(
-                "The advert makes a vehicle-history clearance claim. " +
-                    "Do not treat DVLA/DVSA data as proof of an HPI result. " +
-                    "Request the actual history-check evidence or obtain " +
-                    "an independent vehicle-history check."
+                "The advert claims HPI clearance. Do not treat DVLA/DVSA " +
+                    "data as proof of an HPI result. Request the actual " +
+                    "history-check evidence or obtain an independent " +
+                    "vehicle-history check."
             )
         }
 
-        if (
-            containsAny(
-                text,
+        if (containsAny(
+                advertText(advert),
                 "no outstanding finance",
                 "no finance",
-                "finance clear",
-                "clear finance"
+                "finance clear"
             )
         ) {
-
             verificationItems.add(
                 "The advert makes a finance-status claim. No finance " +
                     "status should be inferred unless an authoritative " +
-                    "finance source is actually available."
+                    "finance source is actually available to the pipeline."
             )
         }
 
         /*
          * =========================================================
-         * MOT DEFECT PATTERNS
+         * REPEATED MOT DEFECT / PATTERN ANALYSIS
          * =========================================================
          */
 
         analyseMotDefectPatterns(
             motTests = motTests,
-            advertText = text,
+            advertText = advertText(advert),
             warnings = warnings,
             confirmations = confirmations,
             verificationItems = verificationItems
@@ -506,13 +487,19 @@ class AdvertOfficialCrossCheckEngine {
 
         /*
          * =========================================================
-         * CROSS-EVIDENCE IMPACT PATTERN
+         * CROSS-EVIDENCE PATTERN ANALYSIS
          * =========================================================
+         *
+         * This is deliberately cautious.
+         *
+         * We do NOT say "the vehicle crashed".
+         *
+         * We identify evidence patterns that justify a physical
+         * inspection.
          */
-
         analysePotentialImpactPattern(
             motTests = motTests,
-            advertText = text,
+            advertText = advertText(advert),
             officialSalvageCategory = vehicle.salvageCategory,
             warnings = warnings,
             confirmations = confirmations,
@@ -523,8 +510,14 @@ class AdvertOfficialCrossCheckEngine {
          * =========================================================
          * ACTIVE SYMPTOMS
          * =========================================================
+         *
+         * User/community symptom reports are not official vehicle
+         * facts. They therefore cannot directly contradict the seller
+         * as though they were DVLA/DVSA data.
+         *
+         * They can, however, be presented as additional evidence to
+         * verify.
          */
-
         if (vehicle.activeSymptoms.isNotEmpty()) {
 
             val symptomCount =
@@ -537,46 +530,30 @@ class AdvertOfficialCrossCheckEngine {
 
             verificationItems.add(
                 "Review the reported vehicle symptoms and confirm the " +
-                    "seller's explanation and current physical condition " +
-                    "before purchase."
+                    "seller's explanation and the current physical " +
+                    "condition of the vehicle before purchase."
             )
         }
 
         /*
          * =========================================================
-         * FINAL DEDUPLICATION
+         * DEDUPLICATION
          * =========================================================
-         *
-         * Do NOT lowercase the output here.
-         *
-         * The previous implementation normalised complete sentences
-         * to lowercase and then only capitalised the first character,
-         * which damaged the presentation:
-         *
-         * "Official MOT..." became:
-         * "Official mot..."
-         *
-         * We only need normal distinct() here because the generated
-         * messages are deterministic.
          */
+
         return CrossCheckResult(
-            warnings = warnings
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .distinct(),
-            confirmations = confirmations
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .distinct(),
-            verificationItems = verificationItems
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .distinct()
+            warnings = warnings.distinct(),
+            confirmations = confirmations.distinct(),
+            verificationItems = verificationItems.distinct()
         )
     }
 
     /**
      * Compatibility overload.
+     *
+     * Existing callers that only provide MOT history continue to
+     * work. New callers should pass the Vehicle object so the full
+     * DVSA/DVLA cross-check can run.
      */
     fun compare(
         advert: ParsedVehicleAdvert,
@@ -589,7 +566,7 @@ class AdvertOfficialCrossCheckEngine {
 
     /*
      * =============================================================
-     * ADVERT + MOT
+     * ADVERT + MOT ENGINE
      * =============================================================
      */
 
@@ -599,14 +576,13 @@ class AdvertOfficialCrossCheckEngine {
     ): CrossCheckResult {
 
         if (motTests.isEmpty()) {
-
             return CrossCheckResult(
                 warnings = emptyList(),
                 confirmations = emptyList(),
                 verificationItems = listOf(
                     "No MOT history was available for comparison. " +
                         "This is not evidence that the vehicle has no MOT " +
-                        "issues; the available evidence is incomplete."
+                        "issues; the available evidence is simply incomplete."
                 )
             )
         }
@@ -620,11 +596,6 @@ class AdvertOfficialCrossCheckEngine {
                 advert.mileage
             )
 
-        /*
-         * No advert mileage:
-         *
-         * This is not a warning.
-         */
         if (advertisedMileage == null) {
 
             verificationItems.add(
@@ -677,28 +648,28 @@ class AdvertOfficialCrossCheckEngine {
         }
 
         val chronologicalReadings =
-            officialReadings.sortedWith(
-                compareBy<OfficialMileageReading> {
-                    parseDateTime(it.date)?.date
-                        ?: LocalDate.MIN
-                }.thenBy {
-                    parseDateTime(it.date)?.dateTime
-                        ?: LocalDateTime.MIN
+            officialReadings
+                .filter {
+                    parseDateTime(it.date)?.date != null
                 }
-            )
+                .sortedWith(
+                    compareBy<OfficialMileageReading> {
+                        parseDateTime(it.date)?.date
+                    }.thenBy {
+                        parseDateTime(it.date)?.dateTime
+                    }.thenBy {
+                        it.originalMileage
+                    }
+                )
 
         val latestOfficialReading =
             chronologicalReadings.lastOrNull()
 
-        /*
-         * ---------------------------------------------------------
-         * OFFICIAL READING ABOVE ADVERTISED MILEAGE
-         * ---------------------------------------------------------
-         *
-         * This is a genuine contradiction because a previous official
-         * reading cannot legitimately be higher than the seller's
-         * currently advertised mileage without explanation.
-         */
+        val unitConversionUsed =
+            officialReadings.any {
+                it.originalUnit != advertisedMileage.originalUnit
+            }
+
         val readingsAboveAdvertisedMileage =
             officialReadings.filter {
                 it.miles >
@@ -706,40 +677,38 @@ class AdvertOfficialCrossCheckEngine {
                         MILEAGE_ROUNDING_TOLERANCE
             }
 
-        val strongestReading =
-            readingsAboveAdvertisedMileage.maxByOrNull {
-                it.miles
+        if (readingsAboveAdvertisedMileage.isNotEmpty()) {
+
+            val strongest =
+                readingsAboveAdvertisedMileage.maxByOrNull {
+                    it.miles
+                }
+
+            if (strongest != null) {
+
+                val difference =
+                    strongest.miles -
+                        advertisedMileage.miles
+
+                warnings.add(
+                    "Mileage discrepancy detected: the advert states " +
+                        "${formatAdvertMileage(advertisedMileage)}, but " +
+                        "official MOT history records " +
+                        formatOfficialMileage(strongest) +
+                        "${strongest.date?.let { " on $it" } ?: ""}. " +
+                        "After normalisation, the official reading is " +
+                        "${formatMileage(difference)} miles higher than " +
+                        "the advertised mileage."
+                )
+
+                verificationItems.add(
+                    "Ask the seller to explain why the advertised mileage " +
+                        "is lower than a previous official MOT reading. " +
+                        "Request service records, MOT certificates and " +
+                        "evidence of the current odometer reading."
+                )
             }
-
-        if (strongestReading != null) {
-
-            val difference =
-                strongestReading.miles -
-                    advertisedMileage.miles
-
-            warnings.add(
-                "Mileage discrepancy detected: the advert states " +
-                    "${formatAdvertMileage(advertisedMileage)}, but " +
-                    "official MOT history records " +
-                    formatOfficialMileage(strongestReading) +
-                    "${strongestReading.date?.let { " on $it" } ?: ""}. " +
-                    "The official reading is approximately " +
-                    "${formatMileage(difference)} miles higher."
-            )
-
-            verificationItems.add(
-                "Ask the seller to explain why the advertised mileage " +
-                    "is lower than a previous official MOT reading. " +
-                    "Request service records, MOT certificates and " +
-                    "evidence of the current odometer reading."
-            )
         }
-
-        /*
-         * ---------------------------------------------------------
-         * LATEST MOT VS CURRENT ADVERTISED MILEAGE
-         * ---------------------------------------------------------
-         */
 
         if (latestOfficialReading != null) {
 
@@ -747,15 +716,10 @@ class AdvertOfficialCrossCheckEngine {
                 latestOfficialReading.miles -
                     advertisedMileage.miles
 
-            if (
-                latestDifference >
-                    MILEAGE_ROUNDING_TOLERANCE
+            if (latestDifference >
+                MILEAGE_ROUNDING_TOLERANCE
             ) {
 
-                /*
-                 * If another older MOT already proves a higher reading,
-                 * don't generate another identical contradiction.
-                 */
                 if (readingsAboveAdvertisedMileage.isEmpty()) {
 
                     warnings.add(
@@ -778,21 +742,23 @@ class AdvertOfficialCrossCheckEngine {
             }
         }
 
-        /*
-         * ---------------------------------------------------------
-         * HISTORICAL EXACT MATCH
-         * ---------------------------------------------------------
-         */
-
-        val matchingReading =
-            officialReadings.firstOrNull {
+        val exactMatch =
+            officialReadings.any {
                 abs(
                     it.miles -
                         advertisedMileage.miles
                 ) <= MILEAGE_ROUNDING_TOLERANCE
             }
 
-        if (matchingReading != null) {
+        if (exactMatch) {
+
+            val matchingReading =
+                officialReadings.first {
+                    abs(
+                        it.miles -
+                            advertisedMileage.miles
+                    ) <= MILEAGE_ROUNDING_TOLERANCE
+                }
 
             confirmations.add(
                 "The advertised mileage of " +
@@ -808,13 +774,6 @@ class AdvertOfficialCrossCheckEngine {
             )
         }
 
-        /*
-         * ---------------------------------------------------------
-         * CURRENT MILEAGE ABOVE LAST MOT
-         * ---------------------------------------------------------
-         *
-         * This is normally expected.
-         */
         if (
             latestOfficialReading != null &&
             advertisedMileage.miles >
@@ -831,12 +790,11 @@ class AdvertOfficialCrossCheckEngine {
                 verificationItems.add(
                     "The advertised mileage is approximately " +
                         "${formatMileage(difference)} miles above the " +
-                        "latest official MOT reading. This may simply " +
-                        "reflect mileage accumulated since that MOT, but " +
-                        "the current odometer and recent mileage " +
-                        "documentation should be checked."
+                        "latest official MOT reading. This may reflect " +
+                        "mileage accumulated since the MOT, but the " +
+                        "current odometer and recent mileage documentation " +
+                        "should be checked."
                 )
-
             } else {
 
                 confirmations.add(
@@ -847,12 +805,6 @@ class AdvertOfficialCrossCheckEngine {
                 )
             }
         }
-
-        /*
-         * ---------------------------------------------------------
-         * OFFICIAL MILEAGE REGRESSION
-         * ---------------------------------------------------------
-         */
 
         val regressions =
             findMileageRegressions(
@@ -873,37 +825,21 @@ class AdvertOfficialCrossCheckEngine {
 
             verificationItems.add(
                 "Investigate the official mileage regression. Ask for " +
-                    "service history and documentation relating to any " +
+                    "service history and any documentation relating to " +
                     "odometer replacement, correction or instrument-cluster " +
                     "work before relying on the stated mileage."
             )
         }
-
-        /*
-         * ---------------------------------------------------------
-         * UNIT CONVERSION
-         * ---------------------------------------------------------
-         */
-
-        val unitConversionUsed =
-            officialReadings.any {
-                it.originalUnit != advertisedMileage.originalUnit
-            }
 
         if (unitConversionUsed) {
 
             confirmations.add(
                 "Mileage comparison accounted for different units in " +
                     "the advert and official MOT history. Kilometre " +
-                    "readings were converted to miles for comparison."
+                    "readings were converted to miles for comparison where " +
+                    "necessary; original units remain visible in the evidence."
             )
         }
-
-        /*
-         * ---------------------------------------------------------
-         * SAME-DAY FAIL -> PASS
-         * ---------------------------------------------------------
-         */
 
         val sameDayRetests =
             findSameDayFailToPassRetests(
@@ -926,12 +862,6 @@ class AdvertOfficialCrossCheckEngine {
             )
         }
 
-        /*
-         * ---------------------------------------------------------
-         * CLEAN MILEAGE RESULT
-         * ---------------------------------------------------------
-         */
-
         if (
             readingsAboveAdvertisedMileage.isEmpty() &&
             regressions.isEmpty() &&
@@ -939,7 +869,7 @@ class AdvertOfficialCrossCheckEngine {
             latestOfficialReading.miles <=
                 advertisedMileage.miles +
                     MILEAGE_ROUNDING_TOLERANCE &&
-            matchingReading == null
+            !exactMatch
         ) {
 
             confirmations.add(
@@ -966,7 +896,7 @@ class AdvertOfficialCrossCheckEngine {
 
     /*
      * =============================================================
-     * OFFICIAL MOT READING
+     * OFFICIAL MOT READING BUILDER
      * =============================================================
      */
 
@@ -1001,15 +931,10 @@ class AdvertOfficialCrossCheckEngine {
 
         val miles =
             when (unit) {
-
-                MileageUnit.MILES ->
-                    mileage
-
+                MileageUnit.MILES -> mileage
                 MileageUnit.KILOMETRES ->
                     kilometresToMiles(mileage)
-
-                MileageUnit.UNKNOWN ->
-                    return null
+                MileageUnit.UNKNOWN -> return null
             }
 
         return OfficialMileageReading(
@@ -1018,9 +943,7 @@ class AdvertOfficialCrossCheckEngine {
             miles = miles,
             date = test.completedDate
                 ?.trim()
-                ?.takeIf {
-                    it.isNotBlank()
-                },
+                ?.takeIf { it.isNotBlank() },
             resultType = resultType,
             testResult = test.testResult
                 ?.trim()
@@ -1043,67 +966,51 @@ class AdvertOfficialCrossCheckEngine {
             return emptyList()
         }
 
-        val ordered =
+        val groups =
             motTests
                 .mapNotNull { test ->
+                    val date =
+                        parseDateTime(test.completedDate)?.date
+                        ?: return@mapNotNull null
 
-                    val parsed =
-                        parseDateTime(
-                            test.completedDate
-                        )
-                            ?: return@mapNotNull null
-
-                    test to parsed
+                    date to test
                 }
-                .sortedWith(
-                    compareBy<Pair<MotTest, ParsedDateTime>> {
-                        it.second.date
-                            ?: LocalDate.MIN
-                    }.thenBy {
-                        it.second.dateTime
-                            ?: LocalDateTime.MIN
-                    }.thenBy {
-                        it.first.motTestNumber.orEmpty()
-                    }
+                .groupBy(
+                    keySelector = { it.first },
+                    valueTransform = { it.second }
                 )
 
         val retests =
             mutableListOf<MotTest>()
 
-        /*
-         * Compare tests on the same date.
-         */
-        val byDate =
-            ordered.groupBy {
-                it.second.date
-            }
+        groups.forEach { (_, sameDay) ->
 
-        byDate.values.forEach { testsOnDate ->
+            val ordered =
+                sameDay.sortedWith(
+                    compareBy<MotTest> {
+                        parseDateTime(it.completedDate)?.dateTime
+                    }.thenBy {
+                        it.motTestNumber
+                    }
+                )
 
-            for (index in 1 until testsOnDate.size) {
+            var failureSeen = false
 
-                val previous =
-                    testsOnDate[index - 1].first
+            ordered.forEach { test ->
 
-                val current =
-                    testsOnDate[index].first
-
-                if (
-                    isFailedTest(
-                        previous.testResult
-                    ) &&
-                    isPassedTest(
-                        current.testResult
-                    )
+                if (isFailedTest(test.testResult)) {
+                    failureSeen = true
+                } else if (
+                    failureSeen &&
+                    isPassedTest(test.testResult)
                 ) {
-                    retests.add(current)
+                    retests.add(test)
                 }
             }
         }
 
         return retests.distinctBy {
-            it.motTestNumber
-                ?: "${it.completedDate}|${it.testResult}"
+            it.motTestNumber ?: it.completedDate
         }
     }
 
@@ -1128,20 +1035,12 @@ class AdvertOfficialCrossCheckEngine {
         val defects =
             motTests
                 .flatMap { test ->
-
-                    test.defects.mapNotNull { defect ->
-
-                        val text =
-                            defect.text
-                                ?.trim()
-                                ?.takeIf {
-                                    it.isNotBlank()
-                                }
-                                ?: return@mapNotNull null
-
+                    test.defects.map { defect ->
                         DefectEvidence(
                             test = test,
-                            text = text,
+                            text = defect.text
+                                ?.trim()
+                                ?.takeIf { it.isNotBlank() },
                             type = defect.type
                                 ?.trim()
                                 ?.uppercase(Locale.ROOT),
@@ -1149,18 +1048,19 @@ class AdvertOfficialCrossCheckEngine {
                         )
                     }
                 }
+                .filter {
+                    it.text != null
+                }
 
         if (defects.isEmpty()) {
             return
         }
 
         /*
-         * Dangerous defects are official evidence.
+         * Dangerous defects.
          */
         val dangerousCount =
-            defects.count {
-                it.dangerous
-            }
+            defects.count { it.dangerous }
 
         if (dangerousCount > 0) {
 
@@ -1177,42 +1077,27 @@ class AdvertOfficialCrossCheckEngine {
 
         /*
          * Repeated defect families.
-         *
-         * Count distinct MOT records, not individual defect lines.
          */
-        val familyEvidence =
-            buildDefectFamilyEvidence(
-                defects
-            )
+        val families =
+            buildDefectFamilies(defects)
 
-        familyEvidence
-            .groupBy {
-                it.family
+        families
+            .mapValues { (_, evidence) ->
+                evidence.distinctBy {
+                    it.test.motTestNumber
+                        ?: it.test.completedDate
+                        ?: it.test.hashCode().toString()
+                }
             }
             .filter {
-                it.value
-                    .map {
-                        it.testNumber
-                            ?: it.testDate
-                    }
-                    .distinct()
-                    .size >=
+                it.value.size >=
                     MIN_REPEATED_DEFECT_OCCURRENCES
             }
             .forEach { (family, evidence) ->
 
-                val distinctTests =
-                    evidence
-                        .map {
-                            it.testNumber
-                                ?: it.testDate
-                        }
-                        .distinct()
-                        .size
-
                 warnings.add(
                     "Repeated MOT defect pattern detected: $family " +
-                        "appears across $distinctTests MOT record(s)."
+                        "appears across ${evidence.size} MOT record(s)."
                 )
 
                 verificationItems.add(
@@ -1223,11 +1108,10 @@ class AdvertOfficialCrossCheckEngine {
             }
 
         /*
-         * ---------------------------------------------------------
-         * EXPLICIT "NO ADVISORIES" CLAIM
-         * ---------------------------------------------------------
+         * Direct contradiction with "no advisories".
+         *
+         * We only do this if the advert explicitly makes the claim.
          */
-
         if (
             containsAny(
                 advertText,
@@ -1238,12 +1122,13 @@ class AdvertOfficialCrossCheckEngine {
         ) {
 
             val latest =
-                motTests.maxByOrNull {
-                    parseDateTime(
-                        it.completedDate
-                    )?.dateTime
-                        ?: LocalDateTime.MIN
-                }
+                motTests
+                    .maxByOrNull {
+                        parseDateTime(
+                            it.completedDate
+                        )?.dateTime
+                            ?: LocalDateTime.MIN
+                    }
 
             val latestAdvisories =
                 latest
@@ -1275,26 +1160,24 @@ class AdvertOfficialCrossCheckEngine {
         }
 
         /*
-         * ---------------------------------------------------------
-         * EXPLICIT BROAD NO-FAULT CLAIM
-         * ---------------------------------------------------------
+         * Direct contradiction with broad mechanical claims.
          */
-
         if (
             containsAny(
                 advertText,
                 "no faults whatsoever",
+                "no faults at all",
+                "no known faults",
                 "no faults",
-                "no known mechanical issues",
-                "no mechanical issues",
-                "no known faults"
+                "no known issues",
+                "no known mechanical issues"
             )
         ) {
 
             val relevant =
                 defects.filter {
                     isMechanicallyRelevant(
-                        it.text
+                        it.text.orEmpty()
                     )
                 }
 
@@ -1315,7 +1198,7 @@ class AdvertOfficialCrossCheckEngine {
         }
 
         /*
-         * Failed tests are evidence, not automatic advert contradictions.
+         * Repeated FAIL tests.
          */
         val failedTests =
             motTests.count {
@@ -1335,24 +1218,38 @@ class AdvertOfficialCrossCheckEngine {
         }
     }
 
-    private fun buildDefectFamilyEvidence(
-        defects: List<DefectEvidence>
-    ): List<DefectFamilyEvidence> {
+    private data class DefectEvidence(
+        val test: MotTest,
+        val text: String?,
+        val type: String?,
+        val dangerous: Boolean
+    )
 
-        return defects.mapNotNull { defect ->
+    private fun buildDefectFamilies(
+        defects: List<DefectEvidence>
+    ): Map<String, List<DefectEvidence>> {
+
+        val families =
+            mutableMapOf<String, MutableList<DefectEvidence>>()
+
+        defects.forEach { defect ->
 
             val family =
                 classifyDefectFamily(
-                    defect.text
+                    defect.text.orEmpty()
                 )
-                    ?: return@mapNotNull null
 
-            DefectFamilyEvidence(
-                family = family,
-                testDate = defect.test.completedDate,
-                testNumber = defect.test.motTestNumber
-            )
+            if (family != null) {
+
+                families
+                    .getOrPut(family) {
+                        mutableListOf()
+                    }
+                    .add(defect)
+            }
         }
+
+        return families
     }
 
     private fun classifyDefectFamily(
@@ -1363,7 +1260,6 @@ class AdvertOfficialCrossCheckEngine {
             text.lowercase(Locale.ROOT)
 
         return when {
-
             containsAny(
                 lower,
                 "headlamp",
@@ -1542,14 +1438,12 @@ class AdvertOfficialCrossCheckEngine {
 
         val allDefectText =
             motTests
-                .flatMap {
-                    it.defects
-                }
+                .flatMap { it.defects }
                 .mapNotNull {
                     it.text
                         ?.trim()
-                        ?.takeIf {
-                            it.isNotBlank()
+                        ?.takeIf { value ->
+                            value.isNotBlank()
                         }
                 }
                 .map {
@@ -1560,67 +1454,22 @@ class AdvertOfficialCrossCheckEngine {
             return
         }
 
-        /*
-         * Count distinct signal families, not individual matching
-         * defect lines.
-         */
-        val impactFamilies =
-            mutableSetOf<String>()
-
-        allDefectText.forEach { text ->
-
-            if (
+        val frontEndSignals =
+            allDefectText.count {
                 containsAny(
-                    text,
+                    it,
                     "headlamp",
-                    "headlight"
-                )
-            ) {
-                impactFamilies.add("lighting")
-            }
-
-            if (
-                containsAny(
-                    text,
+                    "headlight",
                     "front suspension",
-                    "wishbone",
-                    "ball joint"
-                )
-            ) {
-                impactFamilies.add("front suspension")
-            }
-
-            if (
-                containsAny(
-                    text,
+                    "front suspension component",
                     "steering",
-                    "track rod",
-                    "tie rod"
-                )
-            ) {
-                impactFamilies.add("steering")
-            }
-
-            if (
-                containsAny(
-                    text,
+                    "wishbone",
+                    "ball joint",
                     "bumper",
                     "wing",
-                    "front panel"
-                )
-            ) {
-                impactFamilies.add("body")
-            }
-
-            if (
-                containsAny(
-                    text,
                     "front brake"
                 )
-            ) {
-                impactFamilies.add("front brakes")
             }
-        }
 
         val bodyClaim =
             containsAny(
@@ -1631,39 +1480,28 @@ class AdvertOfficialCrossCheckEngine {
                 "no previous repairs",
                 "all panels original",
                 "original bodywork",
-                "bodywork is original",
-                "never repaired"
-            )
-
-        val normalisedSalvage =
-            normaliseComparableText(
-                officialSalvageCategory.orEmpty()
+                "bodywork is original"
             )
 
         val salvageMarker =
             !officialSalvageCategory
-                .isNullOrBlank() &&
-                normalisedSalvage !in setOf(
-                    "none",
-                    "no",
-                    "notstated",
-                    "unknown"
-                )
+                .isNullOrBlank()
 
         /*
-         * Only use the pattern against a strong seller claim.
+         * This is intentionally a pattern flag rather than an
+         * accident conclusion.
          */
         if (
-            impactFamilies.size >=
+            frontEndSignals >=
                 MIN_IMPACT_PATTERN_SIGNALS &&
             bodyClaim
         ) {
 
             warnings.add(
-                "The official MOT history contains several distinct " +
-                    "front-end, steering, suspension or body-related " +
-                    "signals while the advert makes a strong claim that " +
-                    "the vehicle has no accident damage or previous repair."
+                "The official MOT history contains repeated front-end, " +
+                    "steering or suspension-related evidence while the " +
+                    "advert makes a strong claim that the vehicle has no " +
+                    "accident damage or previous repair."
             )
 
             verificationItems.add(
@@ -1676,19 +1514,11 @@ class AdvertOfficialCrossCheckEngine {
             )
         }
 
-        /*
-         * Salvage evidence remains independently important.
-         */
         if (salvageMarker) {
-
-            val category =
-                cleanText(
-                    officialSalvageCategory
-                )
 
             warnings.add(
                 "Official vehicle data contains a salvage/write-off " +
-                    "category marker: $category."
+                    "category marker: $officialSalvageCategory."
             )
 
             verificationItems.add(
@@ -1701,158 +1531,12 @@ class AdvertOfficialCrossCheckEngine {
 
     /*
      * =============================================================
-     * MAKE
-     * =============================================================
-     */
-
-    private fun crossCheckMake(
-        advertValue: Any?,
-        officialValue: String?,
-        warnings: MutableList<String>,
-        confirmations: MutableList<String>,
-        verificationItems: MutableList<String>
-    ) {
-
-        val advertMake =
-            cleanText(advertValue)
-
-        val officialMake =
-            cleanText(officialValue)
-
-        if (
-            advertMake == null ||
-            officialMake == null
-        ) {
-            return
-        }
-
-        if (
-            normaliseComparableText(advertMake) ==
-            normaliseComparableText(officialMake)
-        ) {
-
-            confirmations.add(
-                "Advert make '$advertMake' matches the official vehicle " +
-                    "record."
-            )
-
-        } else {
-
-            warnings.add(
-                "Advert make '$advertMake' does not match the official " +
-                    "vehicle record '$officialMake'."
-            )
-
-            verificationItems.add(
-                "Verify the vehicle identity and ask the seller to explain " +
-                    "the make discrepancy before purchase."
-            )
-        }
-    }
-
-    /*
-     * =============================================================
-     * MODEL
-     * =============================================================
-     */
-
-    private fun crossCheckModel(
-        advertValue: Any?,
-        officialValue: String?,
-        warnings: MutableList<String>,
-        confirmations: MutableList<String>,
-        verificationItems: MutableList<String>
-    ) {
-
-        val advertModel =
-            cleanText(advertValue)
-
-        val officialModel =
-            cleanText(officialValue)
-
-        if (
-            advertModel == null ||
-            officialModel == null
-        ) {
-            return
-        }
-
-        val advertNormalised =
-            normaliseVehicleModel(
-                advertModel
-            )
-
-        val officialNormalised =
-            normaliseVehicleModel(
-                officialModel
-            )
-
-        /*
-         * Exact model match.
-         */
-        if (
-            advertNormalised ==
-            officialNormalised
-        ) {
-
-            confirmations.add(
-                "Advert model '$advertModel' matches the official " +
-                    "vehicle record."
-            )
-
-            return
-        }
-
-        /*
-         * Advert may contain trim/variant wording around the official
-         * base model.
-         */
-        if (
-            advertNormalised.contains(
-                officialNormalised
-            ) ||
-            officialNormalised.contains(
-                advertNormalised
-            )
-        ) {
-
-            confirmations.add(
-                "Advert model '$advertModel' is consistent with the " +
-                    "official base model '$officialModel'; additional " +
-                    "advert wording may represent a trim or variant."
-            )
-
-            return
-        }
-
-        warnings.add(
-            "Advert model '$advertModel' does not match the official " +
-                "vehicle record '$officialModel'."
-        )
-
-        verificationItems.add(
-            "Verify the vehicle identity, specification and VIN because " +
-                "the advertised model differs from the official record."
-        )
-    }
-
-    private fun normaliseVehicleModel(
-        value: String
-    ): String =
-        value
-            .lowercase(Locale.ROOT)
-            .replace(
-                Regex("[^a-z0-9]"),
-                ""
-            )
-
-    /*
-     * =============================================================
-     * GENERIC TEXT CLAIM
+     * TEXT CLAIM HELPERS
      * =============================================================
      */
 
     private fun crossCheckTextClaim(
+        label: String,
         advertValue: Any?,
         officialValue: String?,
         displayName: String,
@@ -1867,10 +1551,7 @@ class AdvertOfficialCrossCheckEngine {
         val officialText =
             cleanText(officialValue)
 
-        if (
-            advertText == null ||
-            officialText == null
-        ) {
+        if (advertText == null || officialText == null) {
             return
         }
 
@@ -1883,7 +1564,6 @@ class AdvertOfficialCrossCheckEngine {
                 "Advert $displayName '$advertText' matches the official " +
                     "vehicle record."
             )
-
         } else {
 
             warnings.add(
@@ -1897,12 +1577,6 @@ class AdvertOfficialCrossCheckEngine {
             )
         }
     }
-
-    /*
-     * =============================================================
-     * FUEL
-     * =============================================================
-     */
 
     private fun crossCheckFuelType(
         advertValue: Any?,
@@ -1922,23 +1596,16 @@ class AdvertOfficialCrossCheckEngine {
                 cleanText(officialValue)
             )
 
-        if (
-            advertFuel == null ||
-            officialFuel == null
-        ) {
+        if (advertFuel == null || officialFuel == null) {
             return
         }
 
-        if (
-            advertFuel ==
-            officialFuel
-        ) {
+        if (advertFuel == officialFuel) {
 
             confirmations.add(
                 "Advert fuel type '$advertFuel' matches the official " +
                     "vehicle record."
             )
-
         } else {
 
             warnings.add(
@@ -1954,116 +1621,6 @@ class AdvertOfficialCrossCheckEngine {
             )
         }
     }
-
-    private fun normaliseFuelType(
-        value: String?
-    ): String? {
-
-        val text =
-            cleanText(value)
-                ?.lowercase(Locale.ROOT)
-                ?: return null
-
-        /*
-         * Specific combinations must be checked BEFORE component
-         * words such as "diesel" or "electric".
-         */
-        return when {
-
-            containsAny(
-                text,
-                "plug in hybrid",
-                "plug-in hybrid",
-                "phev"
-            ) ->
-                "plug-in hybrid"
-
-            containsAny(
-                text,
-                "hybrid"
-            ) &&
-                containsAny(
-                    text,
-                    "diesel"
-                ) ->
-                "diesel hybrid"
-
-            containsAny(
-                text,
-                "hybrid"
-            ) &&
-                containsAny(
-                    text,
-                    "petrol",
-                    "gasoline"
-                ) ->
-                "petrol hybrid"
-
-            containsAny(
-                text,
-                "electric diesel",
-                "diesel electric"
-            ) ->
-                "diesel hybrid"
-
-            containsAny(
-                text,
-                "electric petrol",
-                "petrol electric"
-            ) ->
-                "petrol hybrid"
-
-            containsAny(
-                text,
-                "electric",
-                "fully electric",
-                "battery electric",
-                "bev",
-                "ev"
-            ) ->
-                "electric"
-
-            containsAny(
-                text,
-                "diesel"
-            ) ->
-                "diesel"
-
-            containsAny(
-                text,
-                "petrol",
-                "gasoline"
-            ) ->
-                "petrol"
-
-            containsAny(
-                text,
-                "lpg"
-            ) ->
-                "lpg"
-
-            containsAny(
-                text,
-                "cng"
-            ) ->
-                "cng"
-
-            containsAny(
-                text,
-                "lng"
-            ) ->
-                "lng"
-
-            else ->
-                normaliseComparableText(text)
-        }
-    }
-
-    /*
-     * =============================================================
-     * ENGINE CAPACITY
-     * =============================================================
-     */
 
     private fun crossCheckEngineCapacity(
         advertValue: Any?,
@@ -2086,24 +1643,18 @@ class AdvertOfficialCrossCheckEngine {
         val tolerance =
             maxOf(
                 ENGINE_CC_ABSOLUTE_TOLERANCE,
-                (
-                    official *
-                        ENGINE_CC_PERCENT_TOLERANCE
-                    ).roundToInt()
+                (official * ENGINE_CC_PERCENT_TOLERANCE).roundToInt()
             )
 
         if (
-            abs(
-                advertCc -
-                    official
-            ) <= tolerance
+            abs(advertCc - official) <=
+                tolerance
         ) {
 
             confirmations.add(
                 "Advert engine description is consistent with the " +
                     "official engine capacity of ${official}cc."
             )
-
         } else {
 
             warnings.add(
@@ -2120,12 +1671,6 @@ class AdvertOfficialCrossCheckEngine {
         }
     }
 
-    /*
-     * =============================================================
-     * YEAR
-     * =============================================================
-     */
-
     private fun crossCheckYear(
         advertValue: Any?,
         officialYear: Int?,
@@ -2139,23 +1684,16 @@ class AdvertOfficialCrossCheckEngine {
                 cleanText(advertValue)
             )
 
-        if (
-            advertYear == null ||
-            officialYear == null
-        ) {
+        if (advertYear == null || officialYear == null) {
             return
         }
 
-        if (
-            advertYear ==
-            officialYear
-        ) {
+        if (advertYear == officialYear) {
 
             confirmations.add(
                 "Advert vehicle year $advertYear matches the official " +
                     "vehicle record."
             )
-
         } else {
 
             warnings.add(
@@ -2171,12 +1709,6 @@ class AdvertOfficialCrossCheckEngine {
         }
     }
 
-    /*
-     * =============================================================
-     * INTEGER CLAIM
-     * =============================================================
-     */
-
     private fun crossCheckIntegerClaim(
         label: String,
         advertValue: Any?,
@@ -2191,22 +1723,15 @@ class AdvertOfficialCrossCheckEngine {
                 cleanText(advertValue)
             )
 
-        if (
-            advertNumber == null ||
-            officialValue == null
-        ) {
+        if (advertNumber == null || officialValue == null) {
             return
         }
 
-        if (
-            advertNumber ==
-            officialValue
-        ) {
+        if (advertNumber == officialValue) {
 
             confirmations.add(
                 "Advert $label value matches the official vehicle record."
             )
-
         } else {
 
             warnings.add(
@@ -2220,12 +1745,6 @@ class AdvertOfficialCrossCheckEngine {
             )
         }
     }
-
-    /*
-     * =============================================================
-     * NUMERIC CLAIM
-     * =============================================================
-     */
 
     private fun crossCheckNumericClaim(
         label: String,
@@ -2243,25 +1762,19 @@ class AdvertOfficialCrossCheckEngine {
                 cleanText(advertValue)
             )
 
-        if (
-            advertNumber == null ||
-            officialValue == null
-        ) {
+        if (advertNumber == null || officialValue == null) {
             return
         }
 
         if (
-            abs(
-                advertNumber -
-                    officialValue
-            ) <= tolerance
+            abs(advertNumber - officialValue) <=
+                tolerance
         ) {
 
             confirmations.add(
                 "Advert $label is consistent with the official vehicle " +
                     "record."
             )
-
         } else {
 
             warnings.add(
@@ -2275,12 +1788,6 @@ class AdvertOfficialCrossCheckEngine {
             )
         }
     }
-
-    /*
-     * =============================================================
-     * DATE CLAIM
-     * =============================================================
-     */
 
     private fun crossCheckDateClaim(
         label: String,
@@ -2301,23 +1808,16 @@ class AdvertOfficialCrossCheckEngine {
                 cleanText(officialValue)
             )
 
-        if (
-            advertDate == null ||
-            officialDate == null
-        ) {
+        if (advertDate == null || officialDate == null) {
             return
         }
 
-        if (
-            advertDate ==
-            officialDate
-        ) {
+        if (advertDate == officialDate) {
 
             confirmations.add(
                 "Advert $label is consistent with the official vehicle " +
                     "record."
             )
-
         } else {
 
             warnings.add(
@@ -2331,12 +1831,6 @@ class AdvertOfficialCrossCheckEngine {
             )
         }
     }
-
-    /*
-     * =============================================================
-     * MOT STATUS
-     * =============================================================
-     */
 
     private fun crossCheckMotStatus(
         advertValue: Any?,
@@ -2356,25 +1850,19 @@ class AdvertOfficialCrossCheckEngine {
                 cleanText(officialValue)
             )
 
-        if (
-            advertStatus == null ||
-            officialStatus == null
-        ) {
+        if (advertStatus == null || officialStatus == null) {
             return
         }
 
         if (
-            statusesEquivalent(
-                advertStatus,
-                officialStatus
-            )
+            advertStatus ==
+            officialStatus
         ) {
 
             confirmations.add(
                 "Advert MOT status '$advertStatus' is consistent with " +
                     "the official vehicle record."
             )
-
         } else {
 
             warnings.add(
@@ -2389,62 +1877,6 @@ class AdvertOfficialCrossCheckEngine {
             )
         }
     }
-
-    private fun statusesEquivalent(
-        first: String,
-        second: String
-    ): Boolean {
-
-        if (first == second) {
-            return true
-        }
-
-        val firstNormalised =
-            normaliseStatusForComparison(first)
-
-        val secondNormalised =
-            normaliseStatusForComparison(second)
-
-        return firstNormalised ==
-            secondNormalised
-    }
-
-    private fun normaliseStatusForComparison(
-        value: String
-    ): String {
-
-        val upper =
-            value.uppercase(Locale.ROOT)
-
-        return when {
-
-            upper in setOf(
-                "PASS",
-                "PASSED",
-                "VALID",
-                "CURRENT",
-                "IN FORCE"
-            ) ->
-                "POSITIVE"
-
-            upper in setOf(
-                "FAIL",
-                "FAILED",
-                "INVALID",
-                "EXPIRED"
-            ) ->
-                "NEGATIVE"
-
-            else ->
-                upper
-        }
-    }
-
-    /*
-     * =============================================================
-     * OWNER CLAIM
-     * =============================================================
-     */
 
     private fun crossCheckOwnerClaim(
         advertValue: Any?,
@@ -2461,20 +1893,21 @@ class AdvertOfficialCrossCheckEngine {
             )
 
         if (
-            advertOwnerNumber != null &&
-            officialOwners != null
+            advertOwnerNumber == null ||
+            officialOwners == null
         ) {
+            /*
+             * Natural-language claims such as "one owner from new" are
+             * handled separately below.
+             */
+        } else {
 
-            if (
-                advertOwnerNumber ==
-                officialOwners
-            ) {
+            if (advertOwnerNumber == officialOwners) {
 
                 confirmations.add(
                     "Advert owner/keeper count is consistent with the " +
                         "official vehicle record."
                 )
-
             } else {
 
                 warnings.add(
@@ -2490,7 +1923,10 @@ class AdvertOfficialCrossCheckEngine {
         }
 
         /*
-         * Semantic ownership claim.
+         * "One owner from new" is a semantic claim.
+         *
+         * We only flag it when the official count positively proves a
+         * different number. Missing owner data produces no contradiction.
          */
         if (
             containsAny(
@@ -2517,12 +1953,6 @@ class AdvertOfficialCrossCheckEngine {
         }
     }
 
-    /*
-     * =============================================================
-     * SALVAGE
-     * =============================================================
-     */
-
     private fun crossCheckSalvageClaim(
         advertText: String,
         officialSalvageCategory: String?,
@@ -2535,63 +1965,26 @@ class AdvertOfficialCrossCheckEngine {
             cleanText(
                 officialSalvageCategory
             )
-                ?: return
-
-        val normalisedCategory =
-            category
-                .uppercase(Locale.ROOT)
-                .replace(
-                    Regex("\\s+"),
-                    " "
-                )
+                ?.uppercase(Locale.ROOT)
 
         val writtenOffClaim =
             containsAny(
                 advertText,
                 "never been written off",
                 "never written off",
-                "not written off"
+                "not written off",
+                "hpi clear"
             )
 
         if (
-            normalisedCategory ==
-            "PENDING"
-        ) {
-
-            if (writtenOffClaim) {
-
-                warnings.add(
-                    "The advert claims the vehicle has never been written " +
-                        "off, but the available official salvage/write-off " +
-                        "status is 'PENDING'. This is not proof of a write-off."
-                )
-
-            } else {
-
-                warnings.add(
-                    "Official vehicle data contains a salvage/write-off " +
-                        "status marker of 'PENDING'. This is not proof of a " +
-                        "write-off; the status requires independent verification."
-                )
-            }
-
-            verificationItems.add(
-                "Verify the pending salvage/write-off status using an " +
-                    "independent vehicle-history source before purchase."
-            )
-
-            return
-        }
-
-        val noSalvage =
-            normalisedCategory in setOf(
+            category != null &&
+            category !in setOf(
                 "NONE",
                 "NO",
                 "NOT STATED",
                 "UNKNOWN"
             )
-
-        if (!noSalvage) {
+        ) {
 
             if (writtenOffClaim) {
 
@@ -2600,7 +1993,6 @@ class AdvertOfficialCrossCheckEngine {
                         "off, but official vehicle data contains salvage " +
                         "category '$category'."
                 )
-
             } else {
 
                 warnings.add(
@@ -2613,22 +2005,23 @@ class AdvertOfficialCrossCheckEngine {
                 "Verify the salvage category and obtain supporting vehicle " +
                     "history before purchase."
             )
-
-        } else if (writtenOffClaim) {
-
-            confirmations.add(
-                "The available official vehicle record does not currently " +
-                    "contain a salvage category indicating a recorded " +
-                    "write-off."
+        } else if (
+            category != null &&
+            category in setOf(
+                "NONE",
+                "NO"
             )
+        ) {
+
+            if (writtenOffClaim) {
+                confirmations.add(
+                    "The available official vehicle record does not " +
+                        "currently contain a salvage category indicating " +
+                        "a recorded write-off."
+                )
+            }
         }
     }
-
-    /*
-     * =============================================================
-     * TAX
-     * =============================================================
-     */
 
     private fun crossCheckTaxStatus(
         advertValue: Any?,
@@ -2655,18 +2048,12 @@ class AdvertOfficialCrossCheckEngine {
             return
         }
 
-        if (
-            statusesEquivalent(
-                advertStatus,
-                officialStatus
-            )
-        ) {
+        if (advertStatus == officialStatus) {
 
             confirmations.add(
                 "Advert tax status is consistent with the official " +
                     "vehicle record."
             )
-
         } else {
 
             warnings.add(
@@ -2681,12 +2068,6 @@ class AdvertOfficialCrossCheckEngine {
             )
         }
     }
-
-    /*
-     * =============================================================
-     * VIN
-     * =============================================================
-     */
 
     private fun crossCheckVin(
         advertValue: Any?,
@@ -2717,7 +2098,6 @@ class AdvertOfficialCrossCheckEngine {
             confirmations.add(
                 "Advert VIN matches the official vehicle record."
             )
-
         } else {
 
             warnings.add(
@@ -2736,6 +2116,13 @@ class AdvertOfficialCrossCheckEngine {
      * =============================================================
      * ADVERT DATA ACCESS
      * =============================================================
+     *
+     * The existing ParsedVehicleAdvert model is intentionally not
+     * modified here.
+     *
+     * These helpers allow the engine to consume fields already exposed
+     * by the parser without introducing new application-wide model
+     * fields. Missing fields simply resolve to null.
      */
 
     private fun advertValue(
@@ -2750,9 +2137,10 @@ class AdvertOfficialCrossCheckEngine {
 
             val getterName =
                 "get" +
-                    name.replaceFirstChar {
-                        it.uppercaseChar()
-                    }
+                    name
+                        .replaceFirstChar {
+                            it.uppercaseChar()
+                        }
 
             try {
 
@@ -2763,7 +2151,6 @@ class AdvertOfficialCrossCheckEngine {
                     }
 
                 if (getter != null) {
-
                     val value =
                         getter.invoke(advert)
 
@@ -2777,7 +2164,8 @@ class AdvertOfficialCrossCheckEngine {
 
             } catch (_: Exception) {
                 /*
-                 * Unavailable parser field = unavailable evidence.
+                 * Missing/unreadable parser field is treated as
+                 * unavailable evidence, never as a negative.
                  */
             }
 
@@ -2805,7 +2193,7 @@ class AdvertOfficialCrossCheckEngine {
 
             } catch (_: Exception) {
                 /*
-                 * Unavailable parser field = unavailable evidence.
+                 * Same rule: unavailable field -> null.
                  */
             }
         }
@@ -2861,13 +2249,14 @@ class AdvertOfficialCrossCheckEngine {
                 .toString()
                 .trim()
 
-        return text.takeIf {
-            it.isNotBlank() &&
-                !it.equals(
-                    "null",
-                    ignoreCase = true
-                )
-        }
+        return text
+            .takeIf {
+                it.isNotBlank() &&
+                    !it.equals(
+                        "null",
+                        ignoreCase = true
+                    )
+            }
     }
 
     private fun firstNonBlank(
@@ -2886,6 +2275,73 @@ class AdvertOfficialCrossCheckEngine {
                 Regex("[^a-z0-9]"),
                 ""
             )
+
+    private fun normaliseFuelType(
+        value: String?
+    ): String? {
+
+        val text =
+            cleanText(value)
+                ?.lowercase(Locale.ROOT)
+                ?: return null
+
+        return when {
+
+            containsAny(
+                text,
+                "electric diesel",
+                "diesel hybrid"
+            ) ->
+                "electric diesel"
+
+            containsAny(
+                text,
+                "diesel"
+            ) ->
+                "diesel"
+
+            containsAny(
+                text,
+                "petrol",
+                "gasoline"
+            ) ->
+                "petrol"
+
+            containsAny(
+                text,
+                "electric",
+                "ev"
+            ) ->
+                "electric"
+
+            containsAny(
+                text,
+                "hybrid"
+            ) ->
+                "hybrid"
+
+            containsAny(
+                text,
+                "lpg"
+            ) ->
+                "lpg"
+
+            containsAny(
+                text,
+                "cng"
+            ) ->
+                "cng"
+
+            containsAny(
+                text,
+                "lng"
+            ) ->
+                "lng"
+
+            else ->
+                normaliseComparableText(text)
+        }
+    }
 
     private fun normaliseStatus(
         value: String?
@@ -2960,12 +2416,6 @@ class AdvertOfficialCrossCheckEngine {
             ?.toIntOrNull()
     }
 
-    /*
-     * =============================================================
-     * ENGINE CAPACITY PARSING
-     * =============================================================
-     */
-
     private fun parseEngineSizeToCc(
         value: String?
     ): Int? {
@@ -2974,6 +2424,10 @@ class AdvertOfficialCrossCheckEngine {
             cleanText(value)
                 ?: return null
 
+        /*
+         * Existing Vehicle.engineSize may contain values such as
+         * "2.0", "2.0L" or "1997".
+         */
         val litre =
             Regex(
                 """(?i)^\s*(\d+(?:\.\d+)?)\s*(?:l|litre|litres|liter|liters)?\s*$"""
@@ -2986,7 +2440,6 @@ class AdvertOfficialCrossCheckEngine {
         if (litre != null) {
 
             return when {
-
                 litre in 0.5..10.0 ->
                     (litre * 1000.0).roundToInt()
 
@@ -3012,6 +2465,9 @@ class AdvertOfficialCrossCheckEngine {
             cleanText(text)
                 ?: return null
 
+        /*
+         * Explicit cc/cubic centimetre wording.
+         */
         val explicitCc =
             Regex(
                 """(?i)\b(\d{3,5})\s*(?:cc|cm3|cm³|cubic\s*centimet(?:re|res))\b"""
@@ -3025,6 +2481,10 @@ class AdvertOfficialCrossCheckEngine {
             return explicitCc
         }
 
+        /*
+         * Natural litre wording:
+         * 2.0L, 2.0 litre, 2 litre.
+         */
         val litre =
             Regex(
                 """(?i)\b(\d+(?:\.\d+)?)\s*(?:l|litre|litres|liter|liters)\b"""
@@ -3035,13 +2495,17 @@ class AdvertOfficialCrossCheckEngine {
                 ?.toDoubleOrNull()
 
         if (litre != null) {
-            return (
-                litre *
-                    1000.0
-                ).roundToInt()
+            return (litre * 1000.0).roundToInt()
         }
 
-        return extractInteger(value)
+        /*
+         * If the supplied value is already an integer-like capacity,
+         * accept it as cc.
+         */
+        val number =
+            extractInteger(value)
+
+        return number
             ?.takeIf {
                 it in 500..10000
             }
@@ -3051,22 +2515,8 @@ class AdvertOfficialCrossCheckEngine {
      * =============================================================
      * MILEAGE
      * =============================================================
-     *
-     * IMPORTANT:
-     *
-     * Advert mileage may be expressed as:
-     *
-     * 92000
-     * 92,000
-     * 92 K
-     * 92k
-     * 92 thousand
-     * 92K miles
-     *
-     * The parser already normalises this in rawExtractedAttributes,
-     * but this cross-check engine must correctly interpret the original
-     * advert.mileage value independently.
      */
+
     private fun extractAdvertMileage(
         value: Any?
     ): AdvertMileage? {
@@ -3075,14 +2525,22 @@ class AdvertOfficialCrossCheckEngine {
             cleanText(value)
                 ?: return null
 
+        val mileage =
+            Regex(
+                """(\d[\d,\s]*)(?:\.\d+)?"""
+            )
+                .find(text)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.replace(
+                    Regex("[^0-9]"),
+                    ""
+                )
+                ?.toIntOrNull()
+                ?: return null
+
         val lower =
             text.lowercase(Locale.ROOT)
-
-        /*
-         * ---------------------------------------------------------
-         * UNIT
-         * ---------------------------------------------------------
-         */
 
         val unit =
             when {
@@ -3093,94 +2551,21 @@ class AdvertOfficialCrossCheckEngine {
                     MileageUnit.KILOMETRES
 
                 lower.contains("mile") ||
-                    Regex(
-                        """\bmi\b"""
-                    ).containsMatchIn(lower) ->
+                    Regex("""\bmi\b""")
+                        .containsMatchIn(lower) ->
                     MileageUnit.MILES
 
                 else ->
                     MileageUnit.MILES
             }
 
-        /*
-         * ---------------------------------------------------------
-         * NUMBER
-         * ---------------------------------------------------------
-         *
-         * First detect "K" / "thousand" shorthand.
-         *
-         * Examples:
-         *
-         * 92K
-         * 92 K
-         * 92k miles
-         * 92 thousand miles
-         * 92.5K
-         */
-        val thousandMatch =
-            Regex(
-                """(?i)\b(\d+(?:[.,]\d+)?)\s*(?:k|thousand)\b"""
-            )
-                .find(lower)
-
-        val mileage: Int
-
-        if (thousandMatch != null) {
-
-            val numericPart =
-                thousandMatch
-                    .groupValues
-                    .getOrNull(1)
-                    ?.replace(",", "")
-                    ?: return null
-
-            val numericValue =
-                numericPart
-                    .toDoubleOrNull()
-                    ?: return null
-
-            mileage =
-                (
-                    numericValue *
-                        1000.0
-                    ).roundToInt()
-
-        } else {
-
-            /*
-             * Standard full numerical mileage.
-             *
-             * Examples:
-             *
-             * 92,000
-             * 92000
-             * 92 000
-             */
-            mileage =
-                Regex(
-                    """(?<!\d)(\d[\d, ]*)(?:\.\d+)?"""
-                )
-                    .find(text)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?.replace(
-                        Regex("[^0-9]"),
-                        ""
-                    )
-                    ?.toIntOrNull()
-                    ?: return null
-        }
-
         val miles =
             when (unit) {
-
                 MileageUnit.MILES ->
                     mileage
 
                 MileageUnit.KILOMETRES ->
-                    kilometresToMiles(
-                        mileage
-                    )
+                    kilometresToMiles(mileage)
 
                 MileageUnit.UNKNOWN ->
                     return null
@@ -3289,7 +2674,7 @@ class AdvertOfficialCrossCheckEngine {
 
     /*
      * =============================================================
-     * DATE HELPERS
+     * DATE / TEST RESULT HELPERS
      * =============================================================
      */
 
@@ -3301,19 +2686,21 @@ class AdvertOfficialCrossCheckEngine {
             cleanText(value)
                 ?: return null
 
-        val offsetDateTime =
-            try {
-
+        /*
+         * DVSA/Supabase timestamps commonly arrive as ISO timestamps with
+         * an explicit UTC offset, for example:
+         * 2026-03-13T12:27:11.000Z
+         *
+         * Parse those first so chronology and same-day retest detection
+         * never fall back to a null date simply because the timestamp
+         * contains an offset.
+         */
+        runCatching {
+            val offsetDateTime =
                 OffsetDateTime.parse(
                     raw,
                     DateTimeFormatter.ISO_OFFSET_DATE_TIME
                 )
-
-            } catch (_: DateTimeParseException) {
-                null
-            }
-
-        if (offsetDateTime != null) {
 
             return ParsedDateTime(
                 raw = raw,
@@ -3322,23 +2709,11 @@ class AdvertOfficialCrossCheckEngine {
             )
         }
 
-        val instant =
-            try {
-
-                Instant.parse(
-                    raw
-                )
-
-            } catch (_: DateTimeParseException) {
-                null
-            }
-
-        if (instant != null) {
-
+        runCatching {
             val localDateTime =
-                LocalDateTime.ofInstant(
-                    instant,
-                    ZoneOffset.UTC
+                LocalDateTime.parse(
+                    raw,
+                    DateTimeFormatter.ISO_LOCAL_DATE_TIME
                 )
 
             return ParsedDateTime(
@@ -3352,14 +2727,11 @@ class AdvertOfficialCrossCheckEngine {
             DATE_TIME_FORMATTERS
                 .asSequence()
                 .mapNotNull { formatter ->
-
                     try {
-
                         LocalDateTime.parse(
                             raw,
                             formatter
                         )
-
                     } catch (_: DateTimeParseException) {
                         null
                     }
@@ -3367,7 +2739,6 @@ class AdvertOfficialCrossCheckEngine {
                 .firstOrNull()
 
         if (dateTime != null) {
-
             return ParsedDateTime(
                 raw = raw,
                 date = dateTime.toLocalDate(),
@@ -3379,14 +2750,11 @@ class AdvertOfficialCrossCheckEngine {
             DATE_FORMATTERS
                 .asSequence()
                 .mapNotNull { formatter ->
-
                     try {
-
                         LocalDate.parse(
                             raw,
                             formatter
                         )
-
                     } catch (_: DateTimeParseException) {
                         null
                     }
@@ -3394,7 +2762,6 @@ class AdvertOfficialCrossCheckEngine {
                 .firstOrNull()
 
         return date?.let {
-
             ParsedDateTime(
                 raw = raw,
                 date = it,
@@ -3411,9 +2778,7 @@ class AdvertOfficialCrossCheckEngine {
             cleanText(value)
                 ?: return null
 
-        parseDateTime(
-            text
-        )?.date?.let {
+        parseDateTime(text)?.date?.let {
             return it
         }
 
@@ -3426,15 +2791,12 @@ class AdvertOfficialCrossCheckEngine {
         if (monthYear != null) {
 
             val month =
-                monthYear
-                    .groupValues[1]
+                monthYear.groupValues[1]
 
             val year =
-                monthYear
-                    .groupValues[2]
+                monthYear.groupValues[2]
 
             return try {
-
                 LocalDate.parse(
                     "1 $month $year",
                     DateTimeFormatter.ofPattern(
@@ -3442,7 +2804,6 @@ class AdvertOfficialCrossCheckEngine {
                         Locale.UK
                     )
                 )
-
             } catch (_: DateTimeParseException) {
                 null
             }
@@ -3450,12 +2811,6 @@ class AdvertOfficialCrossCheckEngine {
 
         return null
     }
-
-    /*
-     * =============================================================
-     * TEST RESULT HELPERS
-     * =============================================================
-     */
 
     private fun isFailedTest(
         result: String?
@@ -3485,7 +2840,7 @@ class AdvertOfficialCrossCheckEngine {
 
     /*
      * =============================================================
-     * TEXT CLAIM HELPERS
+     * TEXT / CLAIM DETECTION
      * =============================================================
      */
 
@@ -3497,10 +2852,9 @@ class AdvertOfficialCrossCheckEngine {
         val lower =
             text.lowercase(Locale.ROOT)
 
-        return phrases.any { phrase ->
-
+        return phrases.any {
             lower.contains(
-                phrase.lowercase(Locale.ROOT)
+                it.lowercase(Locale.ROOT)
             )
         }
     }
@@ -3569,9 +2923,7 @@ class AdvertOfficialCrossCheckEngine {
     private fun formatAdvertMileage(
         mileage: AdvertMileage
     ): String =
-        when (
-            mileage.originalUnit
-        ) {
+        when (mileage.originalUnit) {
 
             MileageUnit.MILES ->
                 "${formatMileage(mileage.originalMileage)} miles"
@@ -3588,9 +2940,7 @@ class AdvertOfficialCrossCheckEngine {
     private fun formatOfficialMileage(
         reading: OfficialMileageReading
     ): String =
-        when (
-            reading.originalUnit
-        ) {
+        when (reading.originalUnit) {
 
             MileageUnit.MILES ->
                 "${formatMileage(reading.originalMileage)} miles"
@@ -3606,9 +2956,6 @@ class AdvertOfficialCrossCheckEngine {
 
     companion object {
 
-        /*
-         * Mileage comparison.
-         */
         private const val
             MILEAGE_ROUNDING_TOLERANCE =
                 10
@@ -3625,9 +2972,6 @@ class AdvertOfficialCrossCheckEngine {
             KILOMETRES_PER_MILE =
                 1.609344
 
-        /*
-         * Engine capacity.
-         */
         private const val
             ENGINE_CC_ABSOLUTE_TOLERANCE =
                 100
@@ -3636,43 +2980,31 @@ class AdvertOfficialCrossCheckEngine {
             ENGINE_CC_PERCENT_TOLERANCE =
                 0.05
 
-        /*
-         * Repeated defect evidence.
-         */
         private const val
             MIN_REPEATED_DEFECT_OCCURRENCES =
                 2
 
-        /*
-         * Impact pattern requires three distinct signal families.
-         */
         private const val
             MIN_IMPACT_PATTERN_SIGNALS =
                 3
 
         private val DATE_TIME_FORMATTERS =
             listOf(
-
                 DateTimeFormatter.ofPattern(
                     "yyyy-MM-dd HH:mm:ss"
                 ),
-
                 DateTimeFormatter.ofPattern(
                     "yyyy-MM-dd'T'HH:mm:ss"
                 ),
-
                 DateTimeFormatter.ofPattern(
                     "yyyy-MM-dd HH:mm"
                 ),
-
                 DateTimeFormatter.ofPattern(
                     "yyyy-MM-dd'T'HH:mm"
                 ),
-
                 DateTimeFormatter.ofPattern(
                     "dd/MM/yyyy HH:mm:ss"
                 ),
-
                 DateTimeFormatter.ofPattern(
                     "dd/MM/yyyy HH:mm"
                 )
@@ -3680,13 +3012,10 @@ class AdvertOfficialCrossCheckEngine {
 
         private val DATE_FORMATTERS =
             listOf(
-
                 DateTimeFormatter.ISO_LOCAL_DATE,
-
                 DateTimeFormatter.ofPattern(
                     "dd/MM/yyyy"
                 ),
-
                 DateTimeFormatter.ofPattern(
                     "dd-MM-yyyy"
                 )

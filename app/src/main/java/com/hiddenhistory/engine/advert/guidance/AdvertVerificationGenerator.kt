@@ -13,12 +13,27 @@ class AdvertVerificationGenerator {
         // ---------------------------------------------------------
         // 1. MILEAGE
         // ---------------------------------------------------------
-
-        mileage?.let {
-            checks.add(
-                "Compare the stated mileage of '$it' against the vehicle's official MOT history and available service records."
-            )
-        }
+        //
+        // IMPORTANT:
+        //
+        // Mileage by itself is NOT a verification requirement.
+        //
+        // The Advert ↔ Official Cross-Check engine is responsible
+        // for determining whether an actual mileage discrepancy
+        // exists.
+        //
+        // Therefore we deliberately DO NOT add:
+        //
+        // "Compare the stated mileage..."
+        //
+        // merely because the advert contains a mileage value.
+        //
+        // If the advert contains no mileage, nothing is generated
+        // here either.
+        //
+        // If an actual discrepancy is found, the cross-check engine
+        // supplies the appropriate verification action.
+        // ---------------------------------------------------------
 
         if (
             containsPositivePhrase(
@@ -191,7 +206,6 @@ class AdvertVerificationGenerator {
         if (
             containsPositivePhrase(
                 lowerText,
-                "full service history",
                 "full service history",
                 "fsh",
                 "fully serviced",

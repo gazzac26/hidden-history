@@ -2,10 +2,11 @@ package com.hiddenhistory.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -23,6 +24,24 @@ import com.hiddenhistory.models.MotTest
 import com.hiddenhistory.models.Vehicle
 import com.hiddenhistory.viewmodel.FreeVehicleSearchViewModel
 import kotlinx.coroutines.launch
+
+enum class FreeSearchType(
+    val title: String,
+    val subtitle: String
+) {
+    REGISTRATION(
+        "Registration Search",
+        "Official Sources"
+    ),
+    ADVERT(
+        "Advert Search",
+        "Advert Analysis"
+    ),
+    REGISTRATION_AND_ADVERT(
+        "Registration + Advert",
+        "Official Vehicle Data Sources + Analysis"
+    )
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,6 +70,10 @@ fun FreeVehicleSearchScreen(
 
     val officialCrossCheck by
         viewModel.officialCrossCheck.collectAsStateWithLifecycle()
+
+    var selectedSearchType by remember {
+        mutableStateOf(FreeSearchType.REGISTRATION_AND_ADVERT)
+    }
 
     var universalInput by
         remember {
@@ -120,14 +143,114 @@ fun FreeVehicleSearchScreen(
                 ),
 
             verticalArrangement =
-                Arrangement.spacedBy(10.dp)
+                Arrangement.spacedBy(12.dp)
         ) {
 
             /*
              * =========================================================
-             * UNIVERSAL INPUT
+             * TOP BANNER / INFO CARD
              * =========================================================
              */
+
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                ),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "🔓 Free Vehicle Intelligence",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Choose exactly what you want Free Search to analyse. One successful Free report provides vehicle insight.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Text(
+                text = "What do you want to search?",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+
+            /*
+             * =========================================================
+             * SEARCH TYPE SELECTOR CARDS (Matching Pro UI Style)
+             * =========================================================
+             */
+
+            FreeSearchType.entries.forEach { searchType ->
+                val isSelected = selectedSearchType == searchType
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { selectedSearchType = searchType },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isSelected) {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.surface
+                        }
+                    ),
+                    border = if (isSelected) {
+                        BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                    } else {
+                        BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        RadioButton(
+                            selected = isSelected,
+                            onClick = { selectedSearchType = searchType }
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = searchType.title,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = searchType.subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            /*
+             * =========================================================
+             * UNIVERSAL INPUT (Dynamic Hint)
+             * =========================================================
+             */
+
+            val inputLabel = when (selectedSearchType) {
+                FreeSearchType.REGISTRATION -> "Enter Registration (e.g. AB12 CDE)..."
+                FreeSearchType.ADVERT -> "Paste Advert Text or Link..."
+                FreeSearchType.REGISTRATION_AND_ADVERT -> "Enter Reg, or Paste Advert And Reg..."
+            }
 
             OutlinedTextField(
 
@@ -140,15 +263,13 @@ fun FreeVehicleSearchScreen(
 
                 label = {
 
-                    Text(
-                        "Enter Reg, or Paste Advert And Reg..."
-                    )
+                    Text(inputLabel)
                 },
 
                 modifier =
                     Modifier
                         .fillMaxWidth()
-                        .height(120.dp),
+                        .height(110.dp),
 
                 shape =
                     RoundedCornerShape(12.dp),
@@ -188,9 +309,9 @@ fun FreeVehicleSearchScreen(
             Button(
 
                 onClick = {
-
                     viewModel.processUniversalInput(
-                        universalInput
+                        input = universalInput,
+                        searchType = selectedSearchType
                     )
                 },
 
@@ -806,26 +927,9 @@ fun FreeVehicleSearchScreen(
 
                                     onMotTestClick = { motTest ->
 
-                                        /*
-                                         * Keep the selected MOT test
-                                         * inside the FreeVehicleSearchViewModel
-                                         * as before.
-                                         */
-
                                         viewModel.selectMotTest(
                                             motTest
                                         )
-
-                                        /*
-                                         * IMPORTANT:
-                                         *
-                                         * Pass the ACTUAL MotTest object
-                                         * to MainActivity.
-                                         *
-                                         * MainActivity will then place the
-                                         * same object into the shared
-                                         * MotViewModel before navigating.
-                                         */
 
                                         currentVehicle?.let { vehicle ->
 

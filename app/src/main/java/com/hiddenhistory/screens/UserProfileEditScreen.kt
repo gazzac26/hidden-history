@@ -31,47 +31,27 @@ fun UserProfileEditScreen(
     val userId = SupabaseManager.client.auth.currentUserOrNull()?.id ?: return
     val profile by viewModel.getProfileFlow(userId).collectAsStateWithLifecycle(initialValue = null)
 
-    // State for all fields
+    // State for essential fields
     var username by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var firstName by remember { mutableStateOf("") }
     var lastName by remember { mutableStateOf("") }
     var phoneNumber by remember { mutableStateOf("") }
-    var address1 by remember { mutableStateOf("") }
-    var address2 by remember { mutableStateOf("") }
-    var city by remember { mutableStateOf("") }
-    var county by remember { mutableStateOf("") }
-    var postcode by remember { mutableStateOf("") }
-    var country by remember { mutableStateOf("") }
-    var bio by remember { mutableStateOf("") }
-    var dob by remember { mutableStateOf("") }
-    var licenseNumber by remember { mutableStateOf("") }
-    var licencePassDate by remember { mutableStateOf("") }
-    var occupation by remember { mutableStateOf("") }
     var prefVehicle by remember { mutableStateOf("") }
     var ownedVehicle by remember { mutableStateOf("") }
-    var drivingConfidence by remember { mutableStateOf("") }
-    var vehicleKnowledge by remember { mutableStateOf("") }
-    var primaryUse by remember { mutableStateOf("") }
-    var budget by remember { mutableStateOf("") }
-    var performance by remember { mutableStateOf("") }
-    var economy by remember { mutableStateOf("") }
-    var insurance by remember { mutableStateOf("") }
     var imageUrl by remember { mutableStateOf("") }
     var signedImageUrl by remember { mutableStateOf<String?>(null) }
 
     // Load data
     LaunchedEffect(profile) {
         profile?.let {
-            username = it.username ?: ""; email = it.email ?: ""; firstName = it.firstName ?: ""
-            lastName = it.lastName ?: ""; phoneNumber = it.phoneNumber ?: ""; address1 = it.addressLine1 ?: ""
-            address2 = it.addressLine2 ?: ""; city = it.city ?: ""; county = it.county ?: ""
-            postcode = it.postcode ?: ""; country = it.country ?: ""; bio = it.bio ?: ""
-            dob = it.dateOfBirth ?: ""; licenseNumber = it.licenseNumber ?: ""
-            licencePassDate = it.licencePassDate ?: ""; occupation = it.occupation ?: ""
-            prefVehicle = it.prefVehicle ?: ""; ownedVehicle = it.ownedVehicle ?: ""
-            drivingConfidence = it.drivingConfidence ?: ""; vehicleKnowledge = it.vehicleKnowledgeLevel ?: ""
-            primaryUse = it.primaryVehicleUse ?: "";
+            username = it.username ?: ""
+            email = it.email ?: ""
+            firstName = it.firstName ?: ""
+            lastName = it.lastName ?: ""
+            phoneNumber = it.phoneNumber ?: ""
+            prefVehicle = it.prefVehicle ?: ""
+            ownedVehicle = it.ownedVehicle ?: ""
             imageUrl = it.profileImageUrl ?: ""
         }
     }
@@ -94,51 +74,89 @@ fun UserProfileEditScreen(
         }
     }
 
-    Column(modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         // Image UI
-        AsyncImage(model = signedImageUrl, contentDescription = "Profile Photo", modifier = Modifier.size(100.dp).align(Alignment.CenterHorizontally))
-        Button(onClick = { pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+        AsyncImage(
+            model = signedImageUrl,
+            contentDescription = "Profile Photo",
+            modifier = Modifier
+                .size(100.dp)
+                .align(Alignment.CenterHorizontally)
+        )
+        Button(
+            onClick = { pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            modifier = Modifier.align(Alignment.CenterHorizontally)
+        ) {
             Text("Change Photo")
         }
 
-        // All Fields
-        OutlinedTextField(value = username, onValueChange = { username = it }, label = { Text("Username") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Email") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = firstName, onValueChange = { firstName = it }, label = { Text("First Name") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = lastName, onValueChange = { lastName = it }, label = { Text("Last Name") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = phoneNumber, onValueChange = { phoneNumber = it }, label = { Text("Phone") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = address1, onValueChange = { address1 = it }, label = { Text("Address Line 1") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = address2, onValueChange = { address2 = it }, label = { Text("Address Line 2") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = city, onValueChange = { city = it }, label = { Text("City") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = county, onValueChange = { county = it }, label = { Text("County") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = postcode, onValueChange = { postcode = it }, label = { Text("Postcode") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = country, onValueChange = { country = it }, label = { Text("Country") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = bio, onValueChange = { bio = it }, label = { Text("Bio") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = dob, onValueChange = { dob = it }, label = { Text("DOB") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = licenseNumber, onValueChange = { licenseNumber = it }, label = { Text("License Number") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = licencePassDate, onValueChange = { licencePassDate = it }, label = { Text("Pass Date") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = occupation, onValueChange = { occupation = it }, label = { Text("Occupation") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = prefVehicle, onValueChange = { prefVehicle = it }, label = { Text("Preferred Vehicle") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = ownedVehicle, onValueChange = { ownedVehicle = it }, label = { Text("Owned Vehicle") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = drivingConfidence, onValueChange = { drivingConfidence = it }, label = { Text("Driving Confidence") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = vehicleKnowledge, onValueChange = { vehicleKnowledge = it }, label = { Text("Vehicle Knowledge") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = primaryUse, onValueChange = { primaryUse = it }, label = { Text("Primary Use") }, modifier = Modifier.fillMaxWidth())
-
+        // Essential Fields
+        OutlinedTextField(
+            value = username,
+            onValueChange = { username = it },
+            label = { Text("Username") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = email,
+            onValueChange = { email = it },
+            label = { Text("Email") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = firstName,
+            onValueChange = { firstName = it },
+            label = { Text("First Name") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = lastName,
+            onValueChange = { lastName = it },
+            label = { Text("Last Name") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = phoneNumber,
+            onValueChange = { phoneNumber = it },
+            label = { Text("Phone") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = prefVehicle,
+            onValueChange = { prefVehicle = it },
+            label = { Text("Preferred Vehicle") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = ownedVehicle,
+            onValueChange = { ownedVehicle = it },
+            label = { Text("Owned Vehicle") },
+            modifier = Modifier.fillMaxWidth()
+        )
 
         Button(
-            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 16.dp),
             onClick = {
                 val updated = profile?.copy(
-                    username = username, email = email, firstName = firstName, lastName = lastName,
-                    phoneNumber = phoneNumber, addressLine1 = address1, addressLine2 = address2,
-                    city = city, county = county, postcode = postcode, country = country,
-                    dateOfBirth = dob, licenseNumber = licenseNumber, licencePassDate = licencePassDate,
-                    bio = bio, profileImageUrl = imageUrl, occupation = occupation,
-                    prefVehicle = prefVehicle, ownedVehicle = ownedVehicle,
-                    drivingConfidence = drivingConfidence, vehicleKnowledgeLevel = vehicleKnowledge,
-                    primaryVehicleUse = primaryUse,
+                    username = username,
+                    email = email,
+                    firstName = firstName,
+                    lastName = lastName,
+                    phoneNumber = phoneNumber,
+                    profileImageUrl = imageUrl,
+                    prefVehicle = prefVehicle,
+                    ownedVehicle = ownedVehicle
                 )
                 updated?.let { viewModel.updateProfile(it) }
+                Toast.makeText(context, "Profile Saved", Toast.LENGTH_SHORT).show()
                 onNavigateBack()
             }
         ) {

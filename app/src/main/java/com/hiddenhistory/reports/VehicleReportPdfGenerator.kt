@@ -11,8 +11,6 @@ import com.hiddenhistory.models.SymptomReport
 import com.hiddenhistory.viewmodel.SavedVehicleRecord
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -21,7 +19,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
@@ -48,6 +45,9 @@ object VehicleReportPdfGenerator {
 
     private const val CONTENT_WIDTH =
         PAGE_WIDTH - LEFT_MARGIN - RIGHT_MARGIN
+
+    private const val FIRST_PAGE_HEADER_HEIGHT = 142f
+    private const val CONTINUATION_HEADER_HEIGHT = 42f
 
     private val jsonParser =
         Json {
@@ -93,7 +93,10 @@ object VehicleReportPdfGenerator {
             "Hidden_History_Vehicle_Report_$safeRegistration.pdf"
 
         val outputDirectory =
-            File(context.cacheDir, "vehicle_reports")
+            File(
+                context.cacheDir,
+                "vehicle_reports"
+            )
 
         if (!outputDirectory.exists()) {
             outputDirectory.mkdirs()
@@ -113,7 +116,11 @@ object VehicleReportPdfGenerator {
             PdfDocument()
 
         val writer =
-            PdfWriter(document)
+            PdfWriter(
+                document = document,
+                record = record,
+                vehicle = vehicle
+            )
 
         try {
 
@@ -195,9 +202,9 @@ object VehicleReportPdfGenerator {
 
             writer.finishPage()
 
-            document.writeTo(
-                FileOutputStream(outputFile)
-            )
+            FileOutputStream(outputFile).use { outputStream ->
+                document.writeTo(outputStream)
+            }
 
         } finally {
             document.close()
@@ -248,7 +255,9 @@ object VehicleReportPdfGenerator {
                 make,
                 model
             )
-                .filter { it.isNotBlank() }
+                .filter {
+                    it.isNotBlank()
+                }
                 .joinToString(" ")
                 .ifBlank {
                     "Vehicle Report"
@@ -258,7 +267,7 @@ object VehicleReportPdfGenerator {
             0f,
             0f,
             PAGE_WIDTH.toFloat(),
-            142f,
+            FIRST_PAGE_HEADER_HEIGHT,
             Paint().apply {
                 color =
                     android.graphics.Color.rgb(
@@ -266,6 +275,7 @@ object VehicleReportPdfGenerator {
                         32,
                         44
                     )
+
                 style =
                     Paint.Style.FILL
             }
@@ -275,8 +285,10 @@ object VehicleReportPdfGenerator {
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color =
                     android.graphics.Color.WHITE
+
                 textSize =
                     15f
+
                 typeface =
                     Typeface.create(
                         Typeface.DEFAULT,
@@ -295,8 +307,10 @@ object VehicleReportPdfGenerator {
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color =
                     android.graphics.Color.WHITE
+
                 textSize =
                     25f
+
                 typeface =
                     Typeface.create(
                         Typeface.DEFAULT,
@@ -319,8 +333,10 @@ object VehicleReportPdfGenerator {
                         190,
                         255
                     )
+
                 textSize =
                     21f
+
                 typeface =
                     Typeface.create(
                         Typeface.DEFAULT,
@@ -340,13 +356,16 @@ object VehicleReportPdfGenerator {
                 year,
                 "Vehicle Intelligence Report"
             )
-                .filter { it.isNotBlank() }
+                .filter {
+                    it.isNotBlank()
+                }
                 .joinToString(" • ")
 
         val metaPaint =
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color =
                     android.graphics.Color.LTGRAY
+
                 textSize =
                     10f
             }
@@ -358,9 +377,14 @@ object VehicleReportPdfGenerator {
             metaPaint
         )
 
+        val generatedText =
+            "Generated ${formatSavedDate(record.created_at)}"
+
         canvas.drawText(
-            "Generated ${formatSavedDate(record.created_at)}",
-            PAGE_WIDTH - RIGHT_MARGIN - 155f,
+            generatedText,
+            PAGE_WIDTH -
+                RIGHT_MARGIN -
+                155f,
             38f,
             metaPaint
         )
@@ -591,7 +615,9 @@ object VehicleReportPdfGenerator {
         )
 
         val risks =
-            advert.stringList("riskFlags")
+            advert.stringList(
+                "riskFlags"
+            )
 
         if (risks.isNotEmpty()) {
 
@@ -654,6 +680,15 @@ object VehicleReportPdfGenerator {
         }
     }
 
+    /**
+     * Draws the official cross-check findings and confirmations.
+     *
+     * Verification actions are intentionally NOT rendered here.
+     *
+     * They are rendered once later by drawVerificationItems(),
+     * where advert-specific and official verification actions are
+     * combined into the single "WHAT YOU SHOULD VERIFY" section.
+     */
     private fun drawCrossCheck(
         writer: PdfWriter,
         crossCheck: JsonObject?
@@ -673,15 +708,9 @@ object VehicleReportPdfGenerator {
                 "confirmations"
             )
 
-        val verificationItems =
-            crossCheck.stringList(
-                "verificationItems"
-            )
-
         if (
             warnings.isEmpty() &&
-            confirmations.isEmpty() &&
-            verificationItems.isEmpty()
+            confirmations.isEmpty()
         ) {
             return
         }
@@ -708,17 +737,6 @@ object VehicleReportPdfGenerator {
             )
 
             confirmations.forEach {
-                writer.bullet(it)
-            }
-        }
-
-        if (verificationItems.isNotEmpty()) {
-
-            writer.subTitle(
-                "Verification actions"
-            )
-
-            verificationItems.forEach {
                 writer.bullet(it)
             }
         }
@@ -861,6 +879,17 @@ object VehicleReportPdfGenerator {
         }
     }
 
+    /**
+     * Draws all verification actions in one place.
+     *
+     * Advert-specific verification actions come from:
+     *     advert.thingsWorthVerifying
+     *
+     * Official cross-check verification actions come from:
+     *     crossCheck.verificationItems
+     *
+     * Duplicate text is removed before rendering.
+     */
     private fun drawVerificationItems(
         writer: PdfWriter,
         advert: JsonObject?,
@@ -1029,7 +1058,10 @@ object VehicleReportPdfGenerator {
             ?.mapNotNull { element ->
 
                 runCatching {
-                    jsonParser.decodeFromJsonElement(MotTest.serializer(), element)
+                    jsonParser.decodeFromJsonElement(
+                        MotTest.serializer(),
+                        element
+                    )
                 }.getOrNull()
             }
             ?: emptyList()
@@ -1053,7 +1085,10 @@ object VehicleReportPdfGenerator {
             .mapNotNull { item ->
 
                 runCatching {
-                    jsonParser.decodeFromJsonElement(SymptomReport.serializer(), item)
+                    jsonParser.decodeFromJsonElement(
+                        SymptomReport.serializer(),
+                        item
+                    )
                 }.getOrNull()
             }
     }
@@ -1180,13 +1215,16 @@ object VehicleReportPdfGenerator {
      * Handles:
      * - page creation
      * - page breaks
+     * - continuation headers
+     * - page numbers
      * - text wrapping
      * - sections
      * - bullets
-     * - fields
      */
     private class PdfWriter(
-        private val document: PdfDocument
+        private val document: PdfDocument,
+        private val record: SavedVehicleRecord,
+        private val vehicle: JsonObject?
     ) {
 
         var canvas: Canvas
@@ -1195,8 +1233,15 @@ object VehicleReportPdfGenerator {
         private var page:
             PdfDocument.Page
 
-        // Starts below the 142f header box so content doesn't overlap the header
-        private var y = 165f
+        private var pageNumber =
+            1
+
+        /*
+         * First page starts below the large vehicle header.
+         * Subsequent pages start below the compact continuation header.
+         */
+        private var y =
+            165f
 
         private val bodyPaint =
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -1206,8 +1251,10 @@ object VehicleReportPdfGenerator {
                         45,
                         50
                     )
+
                 textSize =
                     10.5f
+
                 typeface =
                     Typeface.create(
                         Typeface.DEFAULT,
@@ -1219,6 +1266,7 @@ object VehicleReportPdfGenerator {
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color =
                     android.graphics.Color.GRAY
+
                 textSize =
                     8.5f
             }
@@ -1227,8 +1275,10 @@ object VehicleReportPdfGenerator {
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color =
                     android.graphics.Color.DKGRAY
+
                 textSize =
                     9f
+
                 typeface =
                     Typeface.create(
                         Typeface.DEFAULT,
@@ -1244,8 +1294,10 @@ object VehicleReportPdfGenerator {
                         35,
                         40
                     )
+
                 textSize =
                     10f
+
                 typeface =
                     Typeface.create(
                         Typeface.DEFAULT,
@@ -1261,8 +1313,10 @@ object VehicleReportPdfGenerator {
                         65,
                         95
                     )
+
                 textSize =
                     14f
+
                 typeface =
                     Typeface.create(
                         Typeface.DEFAULT,
@@ -1278,8 +1332,10 @@ object VehicleReportPdfGenerator {
                         50,
                         55
                     )
+
                 textSize =
                     10.5f
+
                 typeface =
                     Typeface.create(
                         Typeface.DEFAULT,
@@ -1293,7 +1349,7 @@ object VehicleReportPdfGenerator {
                 PdfDocument.PageInfo.Builder(
                     PAGE_WIDTH,
                     PAGE_HEIGHT,
-                    1
+                    pageNumber
                 ).create()
 
             page =
@@ -1305,20 +1361,33 @@ object VehicleReportPdfGenerator {
                 page.canvas
         }
 
+        /**
+         * Kept as the public writer entry point used by generate().
+         *
+         * The first page is already created in init.
+         */
         fun startPage() {
             // First page is already created.
         }
 
+        /**
+         * Finishes the current page.
+         */
         fun finishPage() {
             document.finishPage(page)
         }
 
+        /**
+         * Creates the next PDF page.
+         *
+         * Android requires the currently active page to be finished
+         * before another page can be started.
+         */
         private fun newPage() {
 
             document.finishPage(page)
 
-            val pageNumber =
-                document.pages.size + 1
+            pageNumber += 1
 
             val pageInfo =
                 PdfDocument.PageInfo.Builder(
@@ -1335,10 +1404,146 @@ object VehicleReportPdfGenerator {
             canvas =
                 page.canvas
 
+            drawContinuationHeader()
+
             y =
-                TOP_MARGIN
+                TOP_MARGIN +
+                    CONTINUATION_HEADER_HEIGHT +
+                    14f
         }
 
+        /**
+         * Compact header used on continuation pages.
+         *
+         * The full vehicle header remains exclusive to page one.
+         */
+        private fun drawContinuationHeader() {
+
+            val backgroundPaint =
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color =
+                        android.graphics.Color.rgb(
+                            24,
+                            32,
+                            44
+                        )
+
+                    style =
+                        Paint.Style.FILL
+                }
+
+            canvas.drawRect(
+                0f,
+                0f,
+                PAGE_WIDTH.toFloat(),
+                CONTINUATION_HEADER_HEIGHT,
+                backgroundPaint
+            )
+
+            val brandPaint =
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color =
+                        android.graphics.Color.WHITE
+
+                    textSize =
+                        11f
+
+                    typeface =
+                        Typeface.create(
+                            Typeface.DEFAULT,
+                            Typeface.BOLD
+                        )
+                }
+
+            canvas.drawText(
+                "HIDDEN HISTORY",
+                LEFT_MARGIN,
+                17f,
+                brandPaint
+            )
+
+            val registration =
+                record.registration
+                    .uppercase()
+                    .replace(" ", "")
+
+            val make =
+                vehicle?.string("make")
+                    .orEmpty()
+
+            val model =
+                vehicle?.string("model")
+                    .orEmpty()
+
+            val vehicleName =
+                listOf(
+                    make,
+                    model
+                )
+                    .filter {
+                        it.isNotBlank()
+                    }
+                    .joinToString(" ")
+
+            val title =
+                listOf(
+                    vehicleName,
+                    registration
+                )
+                    .filter {
+                        it.isNotBlank()
+                    }
+                    .joinToString(" • ")
+
+            val titlePaint =
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color =
+                        android.graphics.Color.rgb(
+                            210,
+                            225,
+                            238
+                        )
+
+                    textSize =
+                        9f
+                }
+
+            canvas.drawText(
+                title,
+                LEFT_MARGIN,
+                33f,
+                titlePaint
+            )
+
+            val pagePaint =
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color =
+                        android.graphics.Color.LTGRAY
+
+                    textSize =
+                        8.5f
+                }
+
+            val pageText =
+                "Page $pageNumber"
+
+            canvas.drawText(
+                pageText,
+                PAGE_WIDTH -
+                    RIGHT_MARGIN -
+                    pagePaint.measureText(
+                        pageText
+                    ),
+                25f,
+                pagePaint
+            )
+        }
+
+        /**
+         * Ensures that enough vertical space remains.
+         *
+         * If there isn't enough room, a fresh page is created.
+         */
         private fun ensureSpace(
             requiredHeight: Float
         ) {
@@ -1404,7 +1609,12 @@ object VehicleReportPdfGenerator {
             text: String
         ) {
 
-            val cleanText = text.replace("$", "")
+            val cleanText =
+                text.replace(
+                    "$",
+                    ""
+                )
+
             if (cleanText.isBlank()) {
                 return
             }
@@ -1437,7 +1647,16 @@ object VehicleReportPdfGenerator {
             text: String
         ) {
 
-            val cleanText = text.replace("$", "")
+            val cleanText =
+                text.replace(
+                    "$",
+                    ""
+                )
+
+            if (cleanText.isBlank()) {
+                return
+            }
+
             val bulletWidth =
                 14f
 
@@ -1445,7 +1664,8 @@ object VehicleReportPdfGenerator {
                 wrapText(
                     cleanText,
                     bodyPaint,
-                    CONTENT_WIDTH - bulletWidth
+                    CONTENT_WIDTH -
+                        bulletWidth
                 )
 
             lines.forEachIndexed { index, line ->
@@ -1465,7 +1685,8 @@ object VehicleReportPdfGenerator {
 
                 canvas.drawText(
                     line,
-                    LEFT_MARGIN + bulletWidth,
+                    LEFT_MARGIN +
+                        bulletWidth,
                     y,
                     bodyPaint
                 )
@@ -1481,7 +1702,16 @@ object VehicleReportPdfGenerator {
             text: String
         ) {
 
-            val cleanText = text.replace("$", "")
+            val cleanText =
+                text.replace(
+                    "$",
+                    ""
+                )
+
+            if (cleanText.isBlank()) {
+                return
+            }
+
             val prefix =
                 "$number."
 
@@ -1492,7 +1722,8 @@ object VehicleReportPdfGenerator {
                 wrapText(
                     cleanText,
                     bodyPaint,
-                    CONTENT_WIDTH - prefixWidth
+                    CONTENT_WIDTH -
+                        prefixWidth
                 )
 
             lines.forEachIndexed { index, line ->
@@ -1512,7 +1743,8 @@ object VehicleReportPdfGenerator {
 
                 canvas.drawText(
                     line,
-                    LEFT_MARGIN + prefixWidth,
+                    LEFT_MARGIN +
+                        prefixWidth,
                     y,
                     bodyPaint
                 )
@@ -1528,7 +1760,12 @@ object VehicleReportPdfGenerator {
             value: String?
         ) {
 
-            val cleanValue = value?.replace("$", "")
+            val cleanValue =
+                value?.replace(
+                    "$",
+                    ""
+                )
+
             if (cleanValue.isNullOrBlank()) {
                 return
             }
@@ -1543,19 +1780,23 @@ object VehicleReportPdfGenerator {
             )
 
             val valueX =
-                LEFT_MARGIN + 165f
+                LEFT_MARGIN +
+                    165f
 
             val lines =
                 wrapText(
                     cleanValue,
                     valuePaint,
-                    CONTENT_WIDTH - 165f
+                    CONTENT_WIDTH -
+                        165f
                 )
 
             lines.forEachIndexed { index, line ->
 
                 if (index > 0) {
+
                     ensureSpace(15f)
+
                     y += 14f
                 }
 
@@ -1578,6 +1819,7 @@ object VehicleReportPdfGenerator {
 
             val boxPaint =
                 Paint(Paint.ANTI_ALIAS_FLAG).apply {
+
                     color =
                         when {
                             score >= 70 ->
@@ -1618,6 +1860,7 @@ object VehicleReportPdfGenerator {
 
             val scorePaint =
                 Paint(Paint.ANTI_ALIAS_FLAG).apply {
+
                     color =
                         when {
                             score >= 70 ->
@@ -1663,8 +1906,36 @@ object VehicleReportPdfGenerator {
             text: String
         ) {
 
-            val cleanText = text.replace("$", "")
-            ensureSpace(42f)
+            val cleanText =
+                text.replace(
+                    "$",
+                    ""
+                )
+
+            if (cleanText.isBlank()) {
+                return
+            }
+
+            val lines =
+                wrapText(
+                    cleanText,
+                    bodyPaint,
+                    CONTENT_WIDTH -
+                        24f
+                )
+
+            val height =
+                18f +
+                    (lines.size * 14f)
+
+            /*
+             * Reserve the complete box before drawing it.
+             * This prevents the box itself from being pushed
+             * across a page boundary.
+             */
+            ensureSpace(
+                height + 20f
+            )
 
             val paint =
                 Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -1679,21 +1950,11 @@ object VehicleReportPdfGenerator {
                         Paint.Style.FILL
                 }
 
-            val lines =
-                wrapText(
-                    cleanText,
-                    bodyPaint,
-                    CONTENT_WIDTH - 24f
-                )
-
-            val height =
-                18f +
-                    (lines.size * 14f)
-
             canvas.drawRoundRect(
                 LEFT_MARGIN,
                 y - 12f,
-                PAGE_WIDTH - RIGHT_MARGIN,
+                PAGE_WIDTH -
+                    RIGHT_MARGIN,
                 y + height,
                 10f,
                 10f,
@@ -1721,6 +1982,7 @@ object VehicleReportPdfGenerator {
                 Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     color =
                         android.graphics.Color.LTGRAY
+
                     strokeWidth =
                         1f
                 }
@@ -1728,7 +1990,8 @@ object VehicleReportPdfGenerator {
             canvas.drawLine(
                 LEFT_MARGIN,
                 y,
-                PAGE_WIDTH - RIGHT_MARGIN,
+                PAGE_WIDTH -
+                    RIGHT_MARGIN,
                 y,
                 paint
             )
@@ -1738,7 +2001,16 @@ object VehicleReportPdfGenerator {
             text: String
         ) {
 
-            val cleanText = text.replace("$", "")
+            val cleanText =
+                text.replace(
+                    "$",
+                    ""
+                )
+
+            if (cleanText.isBlank()) {
+                return
+            }
+
             val lines =
                 wrapText(
                     cleanText,
@@ -1821,15 +2093,69 @@ object VehicleReportPdfGenerator {
                             if (
                                 current.isNotEmpty()
                             ) {
+
                                 result.add(
                                     current.toString()
                                 )
                             }
 
-                            current =
-                                StringBuilder(
+                            /*
+                             * If a single word itself is wider
+                             * than the available width, split it
+                             * into drawable chunks rather than
+                             * allowing it to run off the page.
+                             */
+                            if (
+                                paint.measureText(
                                     word
-                                )
+                                ) > maxWidth
+                            ) {
+
+                                var remaining =
+                                    word
+
+                                while (
+                                    remaining.isNotEmpty()
+                                ) {
+
+                                    var cut =
+                                        remaining.length
+
+                                    while (
+                                        cut > 1 &&
+                                        paint.measureText(
+                                            remaining.substring(
+                                                0,
+                                                cut
+                                            )
+                                        ) > maxWidth
+                                    ) {
+                                        cut--
+                                    }
+
+                                    result.add(
+                                        remaining.substring(
+                                            0,
+                                            cut
+                                        )
+                                    )
+
+                                    remaining =
+                                        remaining.substring(
+                                            cut
+                                        )
+                                }
+
+                                current =
+                                    StringBuilder()
+
+                            } else {
+
+                                current =
+                                    StringBuilder(
+                                        word
+                                    )
+                            }
                         }
                     }
 

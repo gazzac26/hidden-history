@@ -25,7 +25,7 @@ fun AdvertAnalyzerScreen(
 
     /*
      * =========================================================
-     * RAW ADVERT INPUT
+     * RAW ADVERT INPUT & SEARCH TYPE STATE
      * =========================================================
      */
 
@@ -33,6 +33,10 @@ fun AdvertAnalyzerScreen(
         mutableStateOf(
             initialAdvertText.orEmpty()
         )
+    }
+
+    var selectedSearchType by remember {
+        mutableStateOf(FreeSearchType.ADVERT)
     }
 
     /*
@@ -82,7 +86,8 @@ fun AdvertAnalyzerScreen(
             )
 
             vehicleViewModel.processUniversalInput(
-                initialAdvertText
+                input = initialAdvertText,
+                searchType = FreeSearchType.REGISTRATION_AND_ADVERT
             )
         }
     }
@@ -157,18 +162,79 @@ fun AdvertAnalyzerScreen(
 
         /*
          * =========================================================
-         * DESCRIPTION
+         * SEARCH TYPE SELECTOR CARDS
          * =========================================================
          */
 
-        Text(
-            text =
-                "Paste a vehicle advert below. AutoApp will analyse " +
-                    "the advert itself and, where official vehicle " +
-                    "information is available, cross-check the " +
-                    "seller's claims against it.",
-            style = MaterialTheme.typography.bodyMedium
-        )
+        OutlinedCard(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = if (selectedSearchType == FreeSearchType.ADVERT) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surface
+                }
+            ),
+            onClick = { selectedSearchType = FreeSearchType.ADVERT }
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                RadioButton(
+                    selected = selectedSearchType == FreeSearchType.ADVERT,
+                    onClick = { selectedSearchType = FreeSearchType.ADVERT }
+                )
+                Column {
+                    Text(
+                        text = "Advert Search",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = "Advert Analysis",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+
+        OutlinedCard(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = if (selectedSearchType == FreeSearchType.REGISTRATION_AND_ADVERT) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surface
+                }
+            ),
+            onClick = { selectedSearchType = FreeSearchType.REGISTRATION_AND_ADVERT }
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                RadioButton(
+                    selected = selectedSearchType == FreeSearchType.REGISTRATION_AND_ADVERT,
+                    onClick = { selectedSearchType = FreeSearchType.REGISTRATION_AND_ADVERT }
+                )
+                Column {
+                    Text(
+                        text = "Registration + Advert",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = "Official Vehicle Data Sources + Analysis",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
 
         /*
          * =========================================================
@@ -186,7 +252,7 @@ fun AdvertAnalyzerScreen(
 
             label = {
                 Text(
-                    "Paste raw advert text here"
+                    "Paste Advert Text or Link..."
                 )
             },
 
@@ -206,13 +272,12 @@ fun AdvertAnalyzerScreen(
         Button(
 
             onClick = {
-
-                advertViewModel.analyzeAdvert(
-                    rawInput
-                )
-
+                if (selectedSearchType == FreeSearchType.ADVERT) {
+                    advertViewModel.analyzeAdvert(rawInput)
+                }
                 vehicleViewModel.processUniversalInput(
-                    rawInput
+                    input = rawInput,
+                    searchType = selectedSearchType
                 )
             },
 
@@ -236,13 +301,13 @@ fun AdvertAnalyzerScreen(
                 )
 
                 Text(
-                    "Processing Advert..."
+                    "Processing..."
                 )
 
             } else {
 
                 Text(
-                    "Analyse Advert"
+                    "Search Vehicle"
                 )
             }
         }
@@ -870,22 +935,6 @@ fun AdvertAnalyzerScreen(
  * =====================================================================
  * COLLAPSIBLE RESULT CARD
  * =====================================================================
- *
- * Reusable UI component for the three major result areas.
- *
- * The actual analysis/data logic remains completely outside this
- * component. It only controls whether the supplied content is visible.
- *
- * Advert Analysis:
- *      expanded by default
- *
- * Official Cross-Check:
- *      collapsed by default
- *
- * Official Vehicle Information:
- *      collapsed by default
- *
- * =====================================================================
  */
 
 @Composable
@@ -913,12 +962,6 @@ private fun CollapsibleResultCard(
         Column(
             modifier = Modifier.fillMaxWidth()
         ) {
-
-            /*
-             * ---------------------------------------------------------
-             * HEADER
-             * ---------------------------------------------------------
-             */
 
             Row(
                 modifier = Modifier
@@ -952,12 +995,6 @@ private fun CollapsibleResultCard(
                         MaterialTheme.colorScheme.primary
                 )
             }
-
-            /*
-             * ---------------------------------------------------------
-             * CONTENT
-             * ---------------------------------------------------------
-             */
 
             AnimatedVisibility(
                 visible = expanded
