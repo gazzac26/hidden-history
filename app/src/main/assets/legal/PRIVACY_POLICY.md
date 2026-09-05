@@ -32,7 +32,10 @@ Hidden History
 
 Address:
 
-[Gary's postal address]
+31 Gorseyfields
+Droylsden
+Manchester
+M43 6DZ
 
 Email:
 
@@ -525,7 +528,10 @@ SovereignSoftwareLtd@gmail.com
 
 Postal address:
 
-[Gary's postal address]
+31 Gorseyfields
+Droylsden
+Manchester
+M43 6DZ
 
 For privacy requests, account deletion, data-correction requests, complaints, security concerns and general enquiries:
 
